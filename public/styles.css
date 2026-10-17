@@ -365,3 +365,6 @@ input:disabled, select:disabled { opacity: .65; }
 .legal { max-width: 720px; margin: 0 auto; }
 .legal h1 { font-size: 22px; margin-bottom: 8px; }
 .legal li { margin: 6px 0; color: var(--text-2); }
+
+label.check { flex-direction: row; align-items: flex-start; gap: 10px; color: var(--text); font-size: 14px; }
+label.check input { width: auto; margin-top: 3px; }

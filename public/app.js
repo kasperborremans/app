@@ -180,6 +180,23 @@ function eurValue(acc) {
   return t.negative ? -Math.abs(v) : v;
 }
 
+// Cent-accounts (bv. VT Markets Cent) rapporteren bedragen in centen: 10.000 = 100 dollar.
+const CENT_CURRENCIES = { USC: 'USD', EUC: 'EUR', GBC: 'GBP' };
+
+function isCentAuto(a) {
+  const cur = String(a.currency || '').toUpperCase();
+  return cur in CENT_CURRENCIES || a.currency === 'USc' || /\bcent\b/i.test(`${a.name || ''} ${a.server || ''}`);
+}
+
+/** Saldo en munt van een gekoppelde rekening, omgerekend als het een cent-account is. */
+function linkedAmount(a, meta) {
+  const cent = meta.cent ?? isCentAuto(a);
+  const raw = Number(a.balance) || 0;
+  const cur = String(a.currency || 'EUR');
+  if (!cent) return { balance: raw, currency: cur, cent };
+  return { balance: raw / 100, currency: CENT_CURRENCIES[cur.toUpperCase()] || cur, cent };
+}
+
 /** Alle rekeningen: zelf bijgehouden + automatisch gekoppelde. */
 function allAccounts() {
   const linked = [];
@@ -187,15 +204,17 @@ function allAccounts() {
     for (const a of c.accounts || []) {
       const meta = state.linkedMeta[a.key] || {};
       if (meta.hidden ?? a.demo) continue;
+      const amount = linkedAmount(a, meta);
       linked.push({
         id: a.key,
         linked: true,
         connId: c.id,
         name: meta.name || a.name,
         institution: c.institution,
-        type: TYPE[meta.type] ? meta.type : (c.kind === 'metaapi' ? 'broker' : 'bank'),
-        currency: a.currency || 'EUR',
-        balance: Number(a.balance) || 0,
+        type: TYPE[meta.type] ? meta.type : (c.kind === 'eb' ? 'bank' : 'broker'),
+        currency: amount.currency,
+        balance: amount.balance,
+        cent: amount.cent,
         pending: a.balance == null,
         holdings: [],
         note: '',
@@ -740,11 +759,17 @@ function openAccountDialog(a = null) {
   form.note.value = a ? a.note : '';
   for (const f of [form.institution, form.currency, form.balance]) f.disabled = linked;
   $('#note-label').hidden = linked;
+  $('#cent-label').hidden = !linked || !isBrokerConn(a);
+  form.cent.checked = !!a?.cent;
   draftHoldings = a ? a.holdings.map(h => ({ ...h })) : [];
   syncTypeUI();
   renderHoldings();
   dlg.showModal();
   if (!linked && !a) form.name.focus();
+}
+
+function isBrokerConn(a) {
+  return remote.connections.find(c => c.id === a.connId)?.kind !== 'eb';
 }
 
 function syncTypeUI() {
@@ -814,7 +839,9 @@ form.addEventListener('submit', e => {
   e.preventDefault();
   const type = form.type.value;
   if (editing?.linked) {
-    state.linkedMeta[editing.id] = { ...(state.linkedMeta[editing.id] || {}), name: form.name.value.trim(), type };
+    const meta = { ...(state.linkedMeta[editing.id] || {}), name: form.name.value.trim(), type };
+    if (!$('#cent-label').hidden) meta.cent = form.cent.checked;
+    state.linkedMeta[editing.id] = meta;
     dlg.close();
     save();
     return;
@@ -987,7 +1014,7 @@ function renderConnections() {
             save();
           } }),
           el('span', {}, meta.name || a.name, a.demo ? el('span', { class: 'hint' }, ' (demo)') : null, a.iban ? el('span', { class: 'hint' }, ` ${maskIban(a.iban)}`) : null),
-          el('span', { class: 'money' }, a.balance == null ? '…' : moneyIn(Number(a.balance), a.currency || 'EUR'))
+          el('span', { class: 'money' }, a.balance == null ? '…' : (amt => moneyIn(amt.balance, amt.currency) + (amt.cent ? ' (cent)' : ''))(linkedAmount(a, meta)))
         );
       }),
       el('div', { class: 'row wrap' },

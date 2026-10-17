@@ -324,6 +324,7 @@ async function refreshMeta(env, conn) {
   acc.balance = Number(info.equity ?? info.balance);
   acc.cashBalance = Number(info.balance);
   acc.currency = info.currency || acc.currency;
+  acc.server = info.server || acc.server || null;
   if (info.broker) conn.institution = info.broker;
   acc.updatedAt = new Date().toISOString();
 }
@@ -386,6 +387,7 @@ async function refreshMfx(env, conn) {
     balance: Number(a.equity ?? a.balance),
     cashBalance: Number(a.balance),
     currency: a.currency || 'USD',
+    server: a.server?.name || null,
     demo: !!a.demo,
     updatedAt: a.lastUpdateDate ? parseMfxDate(a.lastUpdateDate) : new Date().toISOString(),
   }));
