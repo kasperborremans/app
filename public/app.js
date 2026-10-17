@@ -422,8 +422,8 @@ function renderTiles(t, accounts) {
     const accs = accounts.filter(a => a.type === type.id);
     if (!accs.length) continue;
     const v = t.byType[type.id] || 0;
-    box.append(el('div', { class: 'tile' },
-      el('div', { class: 'tile-head' }, el('span', { class: 'swatch', style: `background:${type.color}` }), type.label),
+    box.append(el('div', { class: 'tile', style: `--c:${type.color}` },
+      el('div', { class: 'tile-head' }, el('span', { class: 'swatch' }), type.label),
       el('div', { class: 'tile-value money' + (v < 0 ? ' neg-val' : '') }, money(v)),
       el('div', { class: 'tile-sub' }, `${accs.length} ${accs.length === 1 ? 'rekening' : 'rekeningen'}`
         + (v > 0 && t.assets > 0 ? ` · ${fmtPct.format(v / t.assets)}` : ''))
@@ -549,7 +549,12 @@ function renderHistory() {
   const pts = data.map((d, i) => [sx(xs[i]), sy(d.net)]);
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
   const base = sy(Math.max(y0, 0));
-  chart.append(svg('path', { class: 'area', d: `${line}L${pts[pts.length - 1][0]},${base}L${pts[0][0]},${base}Z` }));
+  const grad = svg('linearGradient', { id: 'area-grad', x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(svg('stop', { offset: 0, class: 'grad-top' }), svg('stop', { offset: 1, class: 'grad-bottom' }));
+  const defs = svg('defs');
+  defs.append(grad);
+  chart.append(defs);
+  chart.append(svg('path', { class: 'area', fill: 'url(#area-grad)', d: `${line}L${pts[pts.length - 1][0]},${base}L${pts[0][0]},${base}Z` }));
   chart.append(svg('path', { class: 'line', d: line }));
 
   const cross = svg('line', { class: 'cross', y1: m.top, y2: m.top + ih, visibility: 'hidden' });
@@ -692,7 +697,9 @@ function accountRow(a) {
     a.note || null,
   ].filter(Boolean).join(' · ');
   const row = el('div', { class: 'acc', tabindex: '0', role: 'button', 'aria-label': `${a.name} bewerken` },
-    el('div', {},
+    el('span', { class: 'acc-ico', style: `--c:${TYPE[a.type].color}`, 'aria-hidden': 'true' },
+      (a.institution || a.name || '?').trim().charAt(0).toUpperCase()),
+    el('div', { class: 'acc-main' },
       el('div', { class: 'acc-name' }, a.name, a.error ? el('span', { class: 'badge warn', title: a.error }, '⚠️') : null),
       el('div', { class: 'acc-sub' }, sub)
     ),
