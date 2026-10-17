@@ -323,6 +323,8 @@ async function refreshMeta(env, conn) {
   // Equity = saldo + open winst/verlies: wat het account nu echt waard is.
   acc.balance = Number(info.equity ?? info.balance);
   acc.cashBalance = Number(info.balance);
+  // Bonus/credit van de broker: zit in de equity, maar is geen eigen geld.
+  acc.credit = Number(info.credit) || 0;
   acc.currency = info.currency || acc.currency;
   acc.server = info.server || acc.server || null;
   if (info.broker) conn.institution = info.broker;
@@ -386,6 +388,7 @@ async function refreshMfx(env, conn) {
     // Equity = saldo + open winst/verlies.
     balance: Number(a.equity ?? a.balance),
     cashBalance: Number(a.balance),
+    credit: a.credit != null ? Number(a.credit) || 0 : null,
     currency: a.currency || 'USD',
     server: a.server?.name || null,
     demo: !!a.demo,

@@ -188,13 +188,24 @@ function isCentAuto(a) {
   return cur in CENT_CURRENCIES || a.currency === 'USc' || /\bcent\b/i.test(`${a.name || ''} ${a.server || ''}`);
 }
 
-/** Saldo en munt van een gekoppelde rekening, omgerekend als het een cent-account is. */
+/**
+ * Saldo en munt van een gekoppelde rekening: omgerekend als het een cent-account is,
+ * en zonder bonus/credit van de broker (dat is geen eigen geld).
+ * Een zelf ingevulde credit (meta.credit, in gewone munt) gaat voor op de automatische.
+ */
 function linkedAmount(a, meta) {
   const cent = meta.cent ?? isCentAuto(a);
-  const raw = Number(a.balance) || 0;
+  const div = cent ? 100 : 1;
   const cur = String(a.currency || 'EUR');
-  if (!cent) return { balance: raw, currency: cur, cent };
-  return { balance: raw / 100, currency: CENT_CURRENCIES[cur.toUpperCase()] || cur, cent };
+  const autoCredit = (Number(a.credit) || 0) / div;
+  const credit = meta.credit != null ? Number(meta.credit) || 0 : autoCredit;
+  return {
+    balance: (Number(a.balance) || 0) / div - credit,
+    currency: cent ? CENT_CURRENCIES[cur.toUpperCase()] || cur : cur,
+    cent,
+    credit,
+    autoCredit,
+  };
 }
 
 /** Alle rekeningen: zelf bijgehouden + automatisch gekoppelde. */
@@ -215,6 +226,10 @@ function allAccounts() {
         currency: amount.currency,
         balance: amount.balance,
         cent: amount.cent,
+        credit: amount.credit,
+        autoCredit: amount.autoCredit,
+        creditManual: meta.credit != null,
+        raw: a,
         pending: a.balance == null,
         holdings: [],
         note: '',
@@ -712,6 +727,7 @@ function accountRow(a) {
   const sub = [
     $('#group-by').value === 'type' ? a.institution : TYPE[a.type].label,
     a.holdings.length ? `${a.holdings.length} ${a.holdings.length === 1 ? 'positie' : 'posities'}` : null,
+    a.credit ? `excl. ${moneyIn(a.credit, a.currency)} bonus` : null,
     a.linked ? `🔗 ${when(a.updatedAt)}` : `bijgewerkt ${fmtDate.format(new Date(a.updatedAt))}`,
     a.note || null,
   ].filter(Boolean).join(' · ');
@@ -766,14 +782,34 @@ function openAccountDialog(a = null) {
   form.note.value = a ? a.note : '';
   for (const f of [form.institution, form.currency, form.balance]) f.disabled = linked;
   $('#note-label').hidden = linked;
-  $('#cent-label').hidden = !linked || !isBrokerConn(a);
+  const broker = linked && isBrokerConn(a);
+  $('#cent-label').hidden = !broker;
+  $('#credit-label').hidden = !broker;
   form.cent.checked = !!a?.cent;
+  form.credit.value = a?.creditManual ? a.credit : '';
+  syncCreditHint();
   draftHoldings = a ? a.holdings.map(h => ({ ...h })) : [];
   syncTypeUI();
   renderHoldings();
   dlg.showModal();
   if (!linked && !a) form.name.focus();
 }
+
+/** Toont het automatisch gevonden credit en houdt het saldo-voorbeeld in het venster actueel. */
+function syncCreditHint() {
+  if (!editing?.linked || $('#credit-label').hidden) return;
+  const draft = { cent: form.cent.checked };
+  const c = form.credit.value.trim();
+  if (c !== '') draft.credit = Math.abs(Number(c.replace(',', '.')) || 0);
+  const amt = linkedAmount(editing.raw, draft);
+  form.balance.value = round2(amt.balance);
+  form.credit.placeholder = amt.autoCredit
+    ? `automatisch: ${round2(amt.autoCredit)}`
+    : 'bv. 200 (leeg = geen bonus)';
+}
+
+form.cent.addEventListener('change', syncCreditHint);
+form.credit.addEventListener('input', syncCreditHint);
 
 function isBrokerConn(a) {
   return remote.connections.find(c => c.id === a.connId)?.kind !== 'eb';
@@ -847,7 +883,12 @@ form.addEventListener('submit', e => {
   const type = form.type.value;
   if (editing?.linked) {
     const meta = { ...(state.linkedMeta[editing.id] || {}), name: form.name.value.trim(), type };
-    if (!$('#cent-label').hidden) meta.cent = form.cent.checked;
+    if (!$('#cent-label').hidden) {
+      meta.cent = form.cent.checked;
+      const c = form.credit.value.trim();
+      if (c === '') delete meta.credit;
+      else meta.credit = Math.abs(Number(c.replace(',', '.')) || 0);
+    }
     state.linkedMeta[editing.id] = meta;
     dlg.close();
     save();

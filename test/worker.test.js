@@ -49,7 +49,7 @@ beforeEach(() => {
     ] });
     if (url.startsWith('https://api.enablebanking.com/aspsps')) return ok({ aspsps: [{ name: 'Argenta', country: 'BE', logo: 'x.png' }] });
     if (url.includes('mt-provisioning-api')) return ok({ name: 'VT live', login: 123, server: 'VTMarkets-Live', region: 'london' });
-    if (url.includes('mt-client-api-v1.london')) return ok({ broker: 'VT Markets', currency: 'USD', balance: 2000, equity: 2100.5 });
+    if (url.includes('mt-client-api-v1.london')) return ok({ broker: 'VT Markets', currency: 'USD', balance: 2000, equity: 2100.5, credit: 400 });
     throw new Error(`onverwachte fetch: ${url}`);
   };
 });
@@ -166,6 +166,7 @@ test('MetaApi: account toevoegen gebruikt equity', async () => {
   assert.equal(c.institution, 'VT Markets');
   assert.equal(c.accounts[0].balance, 2100.5);
   assert.equal(c.accounts[0].currency, 'USD');
+  assert.equal(c.accounts[0].credit, 400);
   assert.equal(calls.find(x => x.url.includes('provisioning')).init.headers['auth-token'], 'meta-token');
   assert.equal((await call(env, '/api/metaapi/add', { method: 'POST', cookie, body: { accountId: '../x' } })).res.status, 400);
 });
@@ -197,7 +198,7 @@ test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity g
     }
     if (u.searchParams.get('session') !== validSession) return ok({ error: true, message: 'Invalid session.' });
     return ok({ error: false, accounts: [
-      { id: 111, name: 'VT live', accountId: 81234567, balance: 2000, equity: 2150.25, currency: 'USD', demo: false, lastUpdateDate: '10/17/2026 09:30', server: { name: 'VTMarkets-Live 3' } },
+      { id: 111, name: 'VT live', accountId: 81234567, balance: 2000, equity: 2150.25, credit: 300, currency: 'USD', demo: false, lastUpdateDate: '10/17/2026 09:30', server: { name: 'VTMarkets-Live 3' } },
       { id: 222, name: 'VT demo', balance: 100000, equity: 100000, currency: 'USD', demo: true, server: { name: 'VTMarkets-Demo' } },
     ] });
   };
@@ -207,6 +208,8 @@ test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity g
   assert.equal(c.institution, 'VT Markets');
   assert.equal(c.accounts[0].balance, 2150.25);
   assert.equal(c.accounts[0].updatedAt, '2026-10-17T09:30:00.000Z');
+  assert.equal(c.accounts[0].credit, 300);
+  assert.equal(c.accounts[1].credit, null);
   assert.equal(c.accounts[1].demo, true);
   assert.equal(res.data.config.myfxbook, true);
 
