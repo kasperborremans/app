@@ -20,7 +20,7 @@ Alles is gratis. Het dashboard draait als **Cloudflare Worker**.
 1. Maak een gratis account op [dash.cloudflare.com](https://dash.cloudflare.com/sign-up).
 2. Ga naar **Workers & Pages → Create → Import a repository**, koppel GitHub en kies deze repository (`kasperborremans/app`) en de juiste branch.
 3. Laat de instellingen staan en klik **Deploy**. Cloudflare maakt automatisch de opslag (KV) aan.
-4. Je krijgt een adres zoals `https://mijn-vermogen.<jouwnaam>.workers.dev`. Noteer het.
+4. Je krijgt een adres zoals `https://vermogen.<jouwnaam>.workers.dev`. Noteer het.
 
 ### 2. Wachtwoord instellen
 
