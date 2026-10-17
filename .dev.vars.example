@@ -1,0 +1,6 @@
+# Kopieer naar .dev.vars voor lokaal testen (nooit committen)
+DASHBOARD_PASSWORD=kies-een-wachtwoord
+SESSION_SECRET=lange-willekeurige-tekst
+# EB_APP_ID=
+# EB_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+# METAAPI_TOKEN=

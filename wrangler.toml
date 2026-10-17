@@ -1,0 +1,16 @@
+name = "mijn-vermogen"
+main = "worker/index.js"
+compatibility_date = "2025-09-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Opslag voor je dashboard, koppelingen en koersen.
+[[kv_namespaces]]
+binding = "KV"
+
+# Saldi automatisch ophalen, 4x per dag (UTC). Banken laten max. 4
+# automatische opvragingen per dag toe; vernieuwen in de app telt niet mee.
+[triggers]
+crons = ["0 5,11,17,23 * * *"]
