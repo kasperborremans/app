@@ -188,23 +188,34 @@ function isCentAuto(a) {
   return cur in CENT_CURRENCIES || a.currency === 'USc' || /\bcent\b/i.test(`${a.name || ''} ${a.server || ''}`);
 }
 
+// VT Markets geeft 20% bonus op stortingen: van wat de broker toont is maar 100/120 echt geld.
+const DEFAULT_BONUS_PCT = [[/vt\s*markets/i, 20]];
+
+function bonusPctFor(a, meta, institution) {
+  if (meta.bonusPct != null) return Number(meta.bonusPct) || 0;
+  const hit = DEFAULT_BONUS_PCT.find(([re]) => re.test(`${institution || ''} ${a.server || ''}`));
+  return hit ? hit[1] : 0;
+}
+
 /**
  * Saldo en munt van een gekoppelde rekening: omgerekend als het een cent-account is,
- * en zonder bonus/credit van de broker (dat is geen eigen geld).
- * Een zelf ingevulde credit (meta.credit, in gewone munt) gaat voor op de automatische.
+ * en zonder bonus van de broker (dat is geen eigen geld).
+ * Met een bonuspercentage tonen we bedrag / (1 + bonus%); anders trekken we de
+ * credit af die de koppeling eventueel doorgeeft.
  */
-function linkedAmount(a, meta) {
+function linkedAmount(a, meta, institution) {
   const cent = meta.cent ?? isCentAuto(a);
   const div = cent ? 100 : 1;
   const cur = String(a.currency || 'EUR');
-  const autoCredit = (Number(a.credit) || 0) / div;
-  const credit = meta.credit != null ? Number(meta.credit) || 0 : autoCredit;
+  const gross = (Number(a.balance) || 0) / div;
+  const bonusPct = bonusPctFor(a, meta, institution);
+  const balance = bonusPct > 0 ? gross / (1 + bonusPct / 100) : gross - (Number(a.credit) || 0) / div;
   return {
-    balance: (Number(a.balance) || 0) / div - credit,
+    balance,
+    bonus: gross - balance,
+    bonusPct,
     currency: cent ? CENT_CURRENCIES[cur.toUpperCase()] || cur : cur,
     cent,
-    credit,
-    autoCredit,
   };
 }
 
@@ -215,7 +226,7 @@ function allAccounts() {
     for (const a of c.accounts || []) {
       const meta = state.linkedMeta[a.key] || {};
       if (meta.hidden ?? a.demo) continue;
-      const amount = linkedAmount(a, meta);
+      const amount = linkedAmount(a, meta, c.institution);
       linked.push({
         id: a.key,
         linked: true,
@@ -226,9 +237,8 @@ function allAccounts() {
         currency: amount.currency,
         balance: amount.balance,
         cent: amount.cent,
-        credit: amount.credit,
-        autoCredit: amount.autoCredit,
-        creditManual: meta.credit != null,
+        bonus: amount.bonus,
+        bonusPct: amount.bonusPct,
         raw: a,
         pending: a.balance == null,
         holdings: [],
@@ -727,7 +737,7 @@ function accountRow(a) {
   const sub = [
     $('#group-by').value === 'type' ? a.institution : TYPE[a.type].label,
     a.holdings.length ? `${a.holdings.length} ${a.holdings.length === 1 ? 'positie' : 'posities'}` : null,
-    a.credit ? `excl. ${moneyIn(a.credit, a.currency)} bonus` : null,
+    a.bonus ? `excl. ${moneyIn(a.bonus, a.currency)} bonus${a.bonusPct ? ` (${a.bonusPct}%)` : ''}` : null,
     a.linked ? `🔗 ${when(a.updatedAt)}` : `bijgewerkt ${fmtDate.format(new Date(a.updatedAt))}`,
     a.note || null,
   ].filter(Boolean).join(' · ');
@@ -786,7 +796,7 @@ function openAccountDialog(a = null) {
   $('#cent-label').hidden = !broker;
   $('#credit-label').hidden = !broker;
   form.cent.checked = !!a?.cent;
-  form.credit.value = a?.creditManual ? a.credit : '';
+  form.bonusPct.value = a?.bonusPct ?? 0;
   syncCreditHint();
   draftHoldings = a ? a.holdings.map(h => ({ ...h })) : [];
   syncTypeUI();
@@ -795,21 +805,19 @@ function openAccountDialog(a = null) {
   if (!linked && !a) form.name.focus();
 }
 
-/** Toont het automatisch gevonden credit en houdt het saldo-voorbeeld in het venster actueel. */
+/** Houdt het saldo-voorbeeld in het venster actueel bij cent-account en bonuspercentage. */
 function syncCreditHint() {
   if (!editing?.linked || $('#credit-label').hidden) return;
-  const draft = { cent: form.cent.checked };
-  const c = form.credit.value.trim();
-  if (c !== '') draft.credit = Math.abs(Number(c.replace(',', '.')) || 0);
-  const amt = linkedAmount(editing.raw, draft);
+  const draft = { cent: form.cent.checked, bonusPct: Math.max(0, Number(String(form.bonusPct.value).replace(',', '.')) || 0) };
+  const amt = linkedAmount(editing.raw, draft, editing.institution);
   form.balance.value = round2(amt.balance);
-  form.credit.placeholder = amt.autoCredit
-    ? `automatisch: ${round2(amt.autoCredit)}`
-    : 'bv. 200 (leeg = geen bonus)';
+  $('#bonus-preview').textContent = amt.bonus
+    ? `Broker toont ${moneyIn(amt.balance + amt.bonus, amt.currency)} → echt geld ${moneyIn(amt.balance, amt.currency)}`
+    : '';
 }
 
 form.cent.addEventListener('change', syncCreditHint);
-form.credit.addEventListener('input', syncCreditHint);
+form.bonusPct.addEventListener('input', syncCreditHint);
 
 function isBrokerConn(a) {
   return remote.connections.find(c => c.id === a.connId)?.kind !== 'eb';
@@ -885,9 +893,8 @@ form.addEventListener('submit', e => {
     const meta = { ...(state.linkedMeta[editing.id] || {}), name: form.name.value.trim(), type };
     if (!$('#cent-label').hidden) {
       meta.cent = form.cent.checked;
-      const c = form.credit.value.trim();
-      if (c === '') delete meta.credit;
-      else meta.credit = Math.abs(Number(c.replace(',', '.')) || 0);
+      meta.bonusPct = Math.max(0, Number(String(form.bonusPct.value).replace(',', '.')) || 0);
+      delete meta.credit;
     }
     state.linkedMeta[editing.id] = meta;
     dlg.close();
@@ -1062,7 +1069,7 @@ function renderConnections() {
             save();
           } }),
           el('span', {}, meta.name || a.name, a.demo ? el('span', { class: 'hint' }, ' (demo)') : null, a.iban ? el('span', { class: 'hint' }, ` ${maskIban(a.iban)}`) : null),
-          el('span', { class: 'money' }, a.balance == null ? '…' : (amt => moneyIn(amt.balance, amt.currency) + (amt.cent ? ' (cent)' : ''))(linkedAmount(a, meta)))
+          el('span', { class: 'money' }, a.balance == null ? '…' : (amt => moneyIn(amt.balance, amt.currency) + (amt.cent ? ' (cent)' : ''))(linkedAmount(a, meta, c.institution)))
         );
       }),
       el('div', { class: 'row wrap' },
