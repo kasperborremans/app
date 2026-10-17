@@ -186,7 +186,7 @@ function allAccounts() {
   for (const c of remote.connections) {
     for (const a of c.accounts || []) {
       const meta = state.linkedMeta[a.key] || {};
-      if (meta.hidden) continue;
+      if (meta.hidden ?? a.demo) continue;
       linked.push({
         id: a.key,
         linked: true,
@@ -840,6 +840,7 @@ form.addEventListener('submit', e => {
 const linkDlg = $('#link-dialog');
 const bankDlg = $('#bank-dialog');
 const metaDlg = $('#meta-dialog');
+const mfxDlg = $('#mfx-dialog');
 let aspspCache = {};
 
 function openLinkChooser() {
@@ -855,6 +856,29 @@ $('#choose-meta').addEventListener('click', () => {
   if (!remote.config.metaApi) return toast('MetaApi is nog niet ingesteld op de server (METAAPI_TOKEN). Zie README.', true);
   $('#meta-error').hidden = true;
   metaDlg.showModal();
+});
+$('#choose-mfx').addEventListener('click', () => {
+  linkDlg.close();
+  $('#mfx-error').hidden = !!remote.config.myfxbook;
+  $('#mfx-error').textContent = remote.config.myfxbook ? '' : 'Let op: MYFXBOOK_EMAIL en MYFXBOOK_PASSWORD zijn nog niet ingesteld in Cloudflare (stap 3).';
+  mfxDlg.showModal();
+});
+$('#mfx-cancel').addEventListener('click', () => mfxDlg.close());
+$('#mfx-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = e.submitter;
+  btn.disabled = true;
+  try {
+    applyRemote(await api('/api/myfxbook/add', { method: 'POST' }));
+    mfxDlg.close();
+    toast('Myfxbook gekoppeld.');
+    save();
+  } catch (ex) {
+    $('#mfx-error').textContent = ex.message;
+    $('#mfx-error').hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
 });
 $('#choose-bank').addEventListener('click', async () => {
   linkDlg.close();
@@ -958,11 +982,11 @@ function renderConnections() {
       (c.accounts || []).map(a => {
         const meta = state.linkedMeta[a.key] || {};
         return el('label', { class: 'conn-acc' },
-          el('input', { type: 'checkbox', checked: meta.hidden ? false : '', onchange: e => {
+          el('input', { type: 'checkbox', checked: (meta.hidden ?? a.demo) ? false : '', onchange: e => {
             state.linkedMeta[a.key] = { ...meta, hidden: !e.target.checked };
             save();
           } }),
-          el('span', {}, meta.name || a.name, a.iban ? el('span', { class: 'hint' }, ` ${maskIban(a.iban)}`) : null),
+          el('span', {}, meta.name || a.name, a.demo ? el('span', { class: 'hint' }, ' (demo)') : null, a.iban ? el('span', { class: 'hint' }, ` ${maskIban(a.iban)}`) : null),
           el('span', { class: 'money' }, a.balance == null ? '…' : moneyIn(Number(a.balance), a.currency || 'EUR'))
         );
       }),
@@ -974,7 +998,7 @@ function renderConnections() {
   }
   const cfg = remote.config || {};
   $('#config-status').replaceChildren(
-    `Enable Banking: ${cfg.enableBanking ? '✅ ingesteld' : '❌ niet ingesteld'} · MetaApi: ${cfg.metaApi ? '✅ ingesteld' : '❌ niet ingesteld'}`,
+    `Enable Banking: ${cfg.enableBanking ? '✅ ingesteld' : '❌ niet ingesteld'} · Myfxbook: ${cfg.myfxbook ? '✅ ingesteld' : '❌ niet ingesteld'} · MetaApi: ${cfg.metaApi ? '✅ ingesteld' : '❌ niet ingesteld'}`,
     cfg.redirectUrl ? el('span', { class: 'block' }, 'Redirect-URL voor Enable Banking: ', el('code', {}, cfg.redirectUrl)) : null
   );
 }

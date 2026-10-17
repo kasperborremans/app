@@ -3,7 +3,7 @@
 Persoonlijk dashboard om al je geld in één oogopslag te zien — op je gsm én op je computer.
 
 - **Argenta, Revolut** (en andere banken): saldo automatisch via open banking (Enable Banking, enkel leestoegang)
-- **VT Markets** (en andere MT4/MT5-brokers): saldo automatisch via MetaApi (investor password, enkel lezen)
+- **VT Markets** (en andere MT4/MT5-brokers): saldo automatisch via Myfxbook (gratis, investor password, enkel lezen)
 - **Lightyear** (en andere brokers zonder API): je vult je posities één keer in, de koersen worden automatisch opgehaald
 - Wisselkoersen automatisch van de ECB, alles omgerekend naar euro
 - Verloop van je vermogen over tijd, verdeling per categorie en per instelling
@@ -48,14 +48,16 @@ Open nu je adres: je kan inloggen. Zelf bijgehouden rekeningen (zoals Lightyear)
 
 De toestemming geldt 180 dagen. Het dashboard waarschuwt je 2 weken op voorhand; dan tik je op **Opnieuw koppelen**.
 
-### 4. VT Markets koppelen (MetaApi)
+### 4. VT Markets koppelen (Myfxbook, gratis)
 
-1. Maak een account op [metaapi.cloud](https://app.metaapi.cloud). Eén account koppelen is gratis.
-2. Voeg je VT Markets MT4/MT5-account toe met je **investor password** (te vinden/aan te maken in je VT Markets-klantenzone). Daarmee kan er nooit gehandeld worden.
-3. Maak een **API token** aan en voeg het in Cloudflare toe als secret `METAAPI_TOKEN`.
-4. In het dashboard: **+ Rekening → 📈 MetaTrader-broker** en plak het account-ID uit MetaApi.
+1. Stel in MetaTrader een **investor password** in (enkel lezen): *Extra → Opties → Server → Wijzigen → investor password*.
+2. Maak een gratis account op [myfxbook.com](https://www.myfxbook.com) en kies **Add account → MetaTrader 4/5 → Auto update**. Vul je VT Markets-login, server en het **investor password** in.
+3. Voeg in Cloudflare twee secrets toe: `MYFXBOOK_EMAIL` en `MYFXBOOK_PASSWORD` (je Myfxbook-login).
+4. In het dashboard: **+ Rekening → 📈 MetaTrader-broker via Myfxbook → Koppelen**.
 
-Het dashboard toont de **equity** (saldo + open winst/verlies).
+Het dashboard toont de **equity** (saldo + open winst/verlies). Demo-accounts worden standaard verborgen.
+
+*Alternatief:* via [MetaApi](https://app.metaapi.cloud) (betalend) met secret `METAAPI_TOKEN`.
 
 ### 5. Lightyear
 

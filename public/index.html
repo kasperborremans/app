@@ -229,9 +229,13 @@
           <strong>🏦 Bank</strong>
           <span>Argenta, Revolut, KBC, Belfius, ING, … via open banking</span>
         </button>
+        <button type="button" class="choice" id="choose-mfx">
+          <strong>📈 MetaTrader-broker via Myfxbook (gratis)</strong>
+          <span>VT Markets en andere MT4/MT5-brokers, met je investor password</span>
+        </button>
         <button type="button" class="choice" id="choose-meta">
-          <strong>📈 MetaTrader-broker</strong>
-          <span>VT Markets en andere MT4/MT5-brokers via MetaApi</span>
+          <strong>📈 MetaTrader-broker via MetaApi (betalend)</strong>
+          <span>Alternatief als Myfxbook niet werkt</span>
         </button>
         <button type="button" class="choice" id="choose-manual">
           <strong>✍️ Zelf bijhouden</strong>
@@ -241,6 +245,25 @@
       <div class="dialog-actions">
         <span class="spacer"></span>
         <button type="submit" class="btn">Annuleren</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Myfxbook -->
+  <dialog id="mfx-dialog">
+    <form id="mfx-form">
+      <h2>MetaTrader via Myfxbook</h2>
+      <ol class="steps">
+        <li>Maak een gratis account op <a href="https://www.myfxbook.com" target="_blank" rel="noopener">myfxbook.com</a>.</li>
+        <li>Kies daar <b>Add account → MetaTrader 4/5 → Auto update</b> en vul je VT Markets-login, server en <b>investor password</b> in (enkel lezen).</li>
+        <li>Zet in Cloudflare de secrets <code>MYFXBOOK_EMAIL</code> en <code>MYFXBOOK_PASSWORD</code> (je Myfxbook-login).</li>
+        <li>Klik hieronder op <b>Koppelen</b>: al je Myfxbook-accounts verschijnen in het dashboard.</li>
+      </ol>
+      <p class="form-error" id="mfx-error" hidden></p>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="mfx-cancel">Annuleren</button>
+        <button type="submit" class="btn primary">Koppelen</button>
       </div>
     </form>
   </dialog>

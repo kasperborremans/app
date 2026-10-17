@@ -3,7 +3,7 @@
    - Bewaart het dashboard (rekeningen, geschiedenis) in KV
    - Haalt automatisch saldi op:
        * banken via Enable Banking (PSD2): Argenta, Revolut, …
-       * MetaTrader-accounts via MetaApi (VT Markets)
+       * MetaTrader-accounts via Myfxbook (gratis) of MetaApi (VT Markets)
        * koersen via Yahoo Finance, wisselkoersen via ECB (Frankfurter)
    - Alles achter één wachtwoord
    ========================================================= */
@@ -13,6 +13,7 @@ import { signSession, verifySession, safeEqual, signJwtRS256 } from './crypto.js
 const EB_API = 'https://api.enablebanking.com';
 const META_PROV = 'https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai';
 const metaClient = region => `https://mt-client-api-v1.${region}.agiliumtrade.ai`;
+const MFX_API = 'https://www.myfxbook.com/api';
 
 const COOKIE = 'mv_session';
 const SESSION_DAYS = 30;
@@ -59,6 +60,7 @@ async function route(request, env, ctx, url) {
   if (pathname === '/api/eb/aspsps' && method === 'GET') return ebAspsps(url, env);
   if (pathname === '/api/eb/start' && method === 'POST') return ebStart(request, env, url.origin);
   if (pathname === '/api/metaapi/add' && method === 'POST') return metaAdd(request, env, url.origin);
+  if (pathname === '/api/myfxbook/add' && method === 'POST') return mfxAdd(env, url.origin);
 
   const m = pathname.match(/^\/api\/connections\/(.+)$/);
   if (m && method === 'DELETE') {
@@ -121,6 +123,7 @@ async function snapshot(env, origin) {
     config: {
       enableBanking: !!(env.EB_APP_ID && env.EB_PRIVATE_KEY),
       metaApi: !!env.METAAPI_TOKEN,
+      myfxbook: !!(env.MYFXBOOK_EMAIL && env.MYFXBOOK_PASSWORD),
       redirectUrl: `${origin}/api/eb/callback`,
     },
   };
@@ -151,6 +154,7 @@ async function refreshAll(env, psu) {
     try {
       if (c.kind === 'eb') await refreshEB(env, c, psu);
       else if (c.kind === 'metaapi') await refreshMeta(env, c);
+      else if (c.kind === 'myfxbook') await refreshMfx(env, c);
       delete c.error;
     } catch (e) {
       c.error = String(e.message || e).slice(0, 300);
@@ -322,6 +326,76 @@ async function refreshMeta(env, conn) {
   acc.currency = info.currency || acc.currency;
   if (info.broker) conn.institution = info.broker;
   acc.updatedAt = new Date().toISOString();
+}
+
+/* ---------- Myfxbook (gratis alternatief voor MetaApi) ---------- */
+
+async function mfxCall(env, method, params) {
+  const res = await fetch(`${MFX_API}/${method}.json?${new URLSearchParams(params)}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MijnVermogen/1.0)', Accept: 'application/json' },
+  });
+  if (!res.ok) throw httpError(502, `Myfxbook: ${res.status}`);
+  return res.json();
+}
+
+async function mfxAccounts(env) {
+  if (!env.MYFXBOOK_EMAIL || !env.MYFXBOOK_PASSWORD) {
+    throw httpError(400, 'Myfxbook is nog niet ingesteld (MYFXBOOK_EMAIL / MYFXBOOK_PASSWORD).');
+  }
+  // Sessie hergebruiken: de gratis API laat 100 verzoeken per dag toe.
+  let session = await env.KV.get('mfx-session');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!session) {
+      const login = await mfxCall(env, 'login', { email: env.MYFXBOOK_EMAIL, password: env.MYFXBOOK_PASSWORD });
+      if (login.error || !login.session) throw httpError(502, `Myfxbook-login mislukt: ${login.message || 'onbekende fout'}`);
+      try { session = decodeURIComponent(login.session); } catch { session = login.session; }
+      await env.KV.put('mfx-session', session, { expirationTtl: 30 * 86400 });
+    }
+    const data = await mfxCall(env, 'get-my-accounts', { session });
+    if (!data.error) return data.accounts || [];
+    if (!/session/i.test(data.message || '')) throw httpError(502, `Myfxbook: ${data.message}`);
+    await env.KV.delete('mfx-session');
+    session = null;
+  }
+  throw httpError(502, 'Myfxbook: sessie ongeldig.');
+}
+
+function mfxInstitution(accounts) {
+  const server = accounts.map(a => a.server?.name || '').find(Boolean) || '';
+  if (/vt\s*markets/i.test(server)) return 'VT Markets';
+  return server ? server.replace(/[-_ ]*(live|real|demo)\b.*$/i, '') || 'Myfxbook' : 'Myfxbook';
+}
+
+async function mfxAdd(env, origin) {
+  const conn = { id: 'mfx', kind: 'myfxbook', institution: 'Myfxbook', accounts: [] };
+  await refreshMfx(env, conn);
+  if (!conn.accounts.length) throw httpError(400, 'Geen accounts gevonden op Myfxbook. Voeg eerst je VT Markets-account toe op myfxbook.com.');
+  conn.checkedAt = new Date().toISOString();
+  const conns = await getJSON(env, 'connections', []);
+  await putJSON(env, 'connections', [...conns.filter(c => c.id !== conn.id), conn]);
+  return json(await snapshot(env, origin));
+}
+
+async function refreshMfx(env, conn) {
+  const accounts = await mfxAccounts(env);
+  conn.institution = mfxInstitution(accounts);
+  conn.accounts = accounts.map(a => ({
+    key: `mfx:${a.id}`,
+    name: a.name || `Account ${a.accountId || a.id}`,
+    // Equity = saldo + open winst/verlies.
+    balance: Number(a.equity ?? a.balance),
+    cashBalance: Number(a.balance),
+    currency: a.currency || 'USD',
+    demo: !!a.demo,
+    updatedAt: a.lastUpdateDate ? parseMfxDate(a.lastUpdateDate) : new Date().toISOString(),
+  }));
+}
+
+/** Myfxbook geeft datums als "MM/dd/yyyy HH:mm". */
+function parseMfxDate(s) {
+  const m = String(s).match(/^(\d{2})\/(\d{2})\/(\d{4})(?: (\d{2}):(\d{2}))?/);
+  if (!m) return new Date().toISOString();
+  return new Date(Date.UTC(+m[3], +m[1] - 1, +m[2], +(m[4] || 0), +(m[5] || 0))).toISOString();
 }
 
 /* ---------- Koersen & wisselkoersen ---------- */

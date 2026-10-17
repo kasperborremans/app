@@ -179,3 +179,55 @@ test('zonder configuratie: duidelijke melding', async () => {
   const s = (await call(env, '/api/state', { cookie })).data;
   assert.deepEqual([s.config.enableBanking, s.config.metaApi], [false, false]);
 });
+
+test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity gebruiken', async () => {
+  const env = makeEnv({ MYFXBOOK_EMAIL: 'ik@example.com', MYFXBOOK_PASSWORD: 'mfx-ww' });
+  const cookie = await login(env);
+  let validSession = 'S1';
+  const mfxCalls = [];
+  globalThis.fetch = async url => {
+    url = String(url);
+    if (!url.includes('myfxbook.com')) throw new Error(`onverwachte fetch: ${url}`);
+    mfxCalls.push(url);
+    const ok = body => new Response(JSON.stringify(body), { status: 200 });
+    const u = new URL(url);
+    if (u.pathname.endsWith('/login.json')) {
+      assert.equal(u.searchParams.get('email'), 'ik@example.com');
+      return ok({ error: false, message: '', session: validSession });
+    }
+    if (u.searchParams.get('session') !== validSession) return ok({ error: true, message: 'Invalid session.' });
+    return ok({ error: false, accounts: [
+      { id: 111, name: 'VT live', accountId: 81234567, balance: 2000, equity: 2150.25, currency: 'USD', demo: false, lastUpdateDate: '10/17/2026 09:30', server: { name: 'VTMarkets-Live 3' } },
+      { id: 222, name: 'VT demo', balance: 100000, equity: 100000, currency: 'USD', demo: true, server: { name: 'VTMarkets-Demo' } },
+    ] });
+  };
+
+  const res = await call(env, '/api/myfxbook/add', { method: 'POST', cookie });
+  const c = res.data.connections[0];
+  assert.equal(c.institution, 'VT Markets');
+  assert.equal(c.accounts[0].balance, 2150.25);
+  assert.equal(c.accounts[0].updatedAt, '2026-10-17T09:30:00.000Z');
+  assert.equal(c.accounts[1].demo, true);
+  assert.equal(res.data.config.myfxbook, true);
+
+  // Tweede vernieuwing: geen nieuwe login nodig.
+  mfxCalls.length = 0;
+  await call(env, '/api/refresh', { method: 'POST', cookie });
+  assert.equal(mfxCalls.filter(u => u.includes('login.json')).length, 0);
+
+  // Sessie verlopen: één keer opnieuw aanmelden.
+  validSession = 'S2';
+  mfxCalls.length = 0;
+  await call(env, '/api/refresh', { method: 'POST', cookie });
+  assert.equal(mfxCalls.filter(u => u.includes('login.json')).length, 1);
+  const conns = await env.KV.get('connections', 'json');
+  assert.equal(conns[0].error, undefined);
+});
+
+test('Myfxbook zonder instellingen of accounts: duidelijke fout', async () => {
+  const env = makeEnv();
+  const cookie = await login(env);
+  const r = await call(env, '/api/myfxbook/add', { method: 'POST', cookie });
+  assert.equal(r.res.status, 400);
+  assert.match(r.data.error, /MYFXBOOK_EMAIL/);
+});
