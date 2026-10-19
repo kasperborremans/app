@@ -35,6 +35,11 @@ beforeEach(() => {
     if (url.includes('finance.yahoo.com')) {
       if (url.includes('VWCE.DE')) return ok({ chart: { result: [{ meta: { regularMarketPrice: 140.5, currency: 'EUR' } }] } });
       if (url.includes('VUSA.L')) return ok({ chart: { result: [{ meta: { regularMarketPrice: 9050, currency: 'GBp' } }] } });
+      if (url.includes('/search?q=IE00BK5BQT80')) return ok({ quotes: [
+        { symbol: 'VWCE.F', exchange: 'FRA', quoteType: 'ETF' },
+        { symbol: 'VWCE.DE', exchange: 'GER', quoteType: 'ETF' },
+      ] });
+      if (url.includes('/search?q=VWCE')) return ok({ quotes: [{ symbol: 'VWCE.DE', exchange: 'GER', quoteType: 'ETF' }] });
       return new Response('{"chart":{"result":null}}', { status: 404 });
     }
     if (url.includes('frankfurter')) return ok({ base: 'EUR', date: '2026-10-16', rates: { USD: 1.25 } });
@@ -99,6 +104,28 @@ test('state opslaan met revisies en automatische koersen', async () => {
   assert.equal(calls.length, 0);
 
   assert.equal((await call(env, '/api/state', { method: 'PUT', cookie, body: { rev: 0, state } })).res.status, 409);
+});
+
+test('ISIN en ticker zonder beurs worden opgezocht; koersen volgen bij openen', async () => {
+  const env = makeEnv();
+  const cookie = await login(env);
+  const state = { accounts: [{ id: 'a', type: 'broker', holdings: [{ symbol: 'IE00BK5BQT80', qty: 1 }, { symbol: 'VWCE', qty: 1 }] }] };
+  const put = await call(env, '/api/state', { method: 'PUT', cookie, body: { rev: 0, state } });
+  assert.deepEqual([put.data.prices.IE00BK5BQT80.price, put.data.prices.IE00BK5BQT80.symbol], [140.5, 'VWCE.DE']);
+  assert.deepEqual([put.data.prices.VWCE.price, put.data.prices.VWCE.symbol], [140.5, 'VWCE.DE']);
+
+  // Verse koersen: openen vraagt niets op.
+  calls.length = 0;
+  await call(env, '/api/state', { cookie });
+  assert.equal(calls.length, 0);
+
+  // Verouderde koersen: openen werkt ze bij, rechtstreeks via het gevonden symbool.
+  const prices = JSON.parse(await env.KV.get('prices'));
+  for (const p of Object.values(prices)) p.at = '2020-01-01T00:00:00Z';
+  await env.KV.put('prices', JSON.stringify(prices));
+  const got = await call(env, '/api/state', { cookie });
+  assert.ok(got.data.prices.VWCE.at > '2025');
+  assert.ok(!calls.some(c => c.url.includes('/search')));
 });
 
 test('Enable Banking: koppelen, callback, saldo en cron', async () => {

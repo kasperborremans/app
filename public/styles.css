@@ -383,6 +383,9 @@ dialog h2 { font-size: 19px; }
 .holding .h-value { font-size: 13px; text-align: right; color: var(--text-2); }
 .holding .remove { border: 0; background: none; color: var(--text-3); cursor: pointer; font-size: 18px; }
 .holding .remove:hover { color: var(--bad); }
+.holding .h-status { grid-column: 1 / -1; font-size: 12px; color: var(--text-3); margin-top: -2px; overflow-wrap: anywhere; }
+.holding .h-status:empty { display: none; }
+.holding .h-status.warn { color: var(--bad); }
 
 .rate-row { display: grid; grid-template-columns: 70px 1fr 32px; gap: 8px; align-items: center; margin-bottom: 6px; }
 .rate-row .remove { border: 0; background: none; color: var(--text-3); cursor: pointer; font-size: 18px; }

@@ -61,7 +61,7 @@ Het dashboard toont de **equity** (saldo + open winst/verlies). Demo-accounts wo
 
 ### 5. Lightyear
 
-Lightyear heeft geen API. Kies **+ Rekening → ✍️ Zelf bijhouden**, categorie *Beleggingen / broker*, en voeg je posities toe met hun Yahoo Finance-ticker (bv. `VWCE.DE`, `IWDA.AS`, `AAPL`). Vul ook je cash in. De koersen worden automatisch bijgewerkt; enkel bij aan- of verkopen pas je het aantal aan.
+Lightyear heeft geen API. Kies **+ Rekening → ✍️ Zelf bijhouden**, categorie *Beleggingen / broker*, en voeg je posities toe met hun ticker (bv. `VWCE.DE`, `IWDA.AS`, `AAPL`), hun ISIN (staat in Lightyear bij elk aandeel) of hun naam. Vul ook je cash in. De koersen worden automatisch opgezocht en bijgewerkt telkens je de app opent (max. 15 minuten oud); enkel bij aan- of verkopen pas je het aantal aan. Per positie zie je welke notering gevonden werd en hoeveel ze vandaag bewoog.
 
 ### 6. Op je gsm als app
 

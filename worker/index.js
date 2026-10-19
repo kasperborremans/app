@@ -51,7 +51,11 @@ async function route(request, env, ctx, url) {
 
   if (!(await isAuthed(request, env))) return json({ error: 'Niet aangemeld' }, 401);
 
-  if (pathname === '/api/state' && method === 'GET') return json(await snapshot(env, url.origin));
+  if (pathname === '/api/state' && method === 'GET') {
+    // Koersen volgen de markt: bij openen van de app bijwerken als ze verouderd zijn.
+    if (await pricesStale(env)) await Promise.allSettled([refreshPrices(env), refreshRates(env)]);
+    return json(await snapshot(env, url.origin));
+  }
   if (pathname === '/api/state' && method === 'PUT') return putState(request, env);
   if (pathname === '/api/refresh' && method === 'POST') {
     await refreshAll(env, psuHeaders(request));
@@ -140,9 +144,9 @@ async function putState(request, env) {
   }
   const rev = stored.rev + 1;
   await env.KV.put('state', JSON.stringify({ rev, state: body.state }));
-  // Nieuwe tickers meteen van een koers voorzien.
+  // Nieuwe tickers (en tickers die eerder mislukten) meteen van een koers voorzien.
   const prices = await getJSON(env, 'prices', {});
-  if (symbolsIn(body.state).some(s => !prices[s])) await refreshPrices(env, body.state);
+  if (symbolsIn(body.state).some(s => !prices[s] || retryable(prices[s]))) await refreshPrices(env, body.state);
   return json({ rev, prices: await getJSON(env, 'prices', {}) });
 }
 
@@ -405,13 +409,37 @@ function parseMfxDate(s) {
 
 /* ---------- Koersen & wisselkoersen ---------- */
 
+const PRICE_MAX_AGE = 15 * 60e3;
+const ERROR_RETRY = 10 * 60e3;
+const YAHOO_HOSTS = ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com'];
+const YAHOO_HEADERS = { 'User-Agent': 'Mozilla/5.0 (compatible; MijnVermogen/1.0)', Accept: 'application/json' };
+// Beurzen waar een Europese broker (Lightyear, …) meestal noteert, in volgorde van voorkeur.
+const EU_EXCHANGES = ['GER', 'AMS', 'PAR', 'BRU', 'MIL', 'MCE', 'LSE', 'EBS', 'VIE', 'HEL', 'STO', 'CPH', 'OSL', 'LIS', 'ISE', 'FRA'];
+const US_EXCHANGES = ['NMS', 'NYQ', 'NGM', 'NCM', 'ASE', 'PCX', 'BTS'];
+const QUOTE_TYPES = ['EQUITY', 'ETF', 'MUTUALFUND', 'CRYPTOCURRENCY', 'INDEX', 'CURRENCY', 'FUTURE'];
+
 function symbolsIn(state) {
   const out = new Set();
   for (const a of state?.accounts || []) for (const h of a.holdings || []) {
-    const s = String(h.symbol || '').trim().toUpperCase();
-    if (/^[A-Z0-9^=.\-]{1,20}$/.test(s)) out.add(s);
+    const s = String(h.symbol || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    if (/^[A-Z0-9^=.\-&' ]{1,40}$/.test(s)) out.add(s);
   }
   return [...out];
+}
+
+const retryable = p => !!p?.error && Date.now() - new Date(p.at || 0) > ERROR_RETRY;
+
+async function pricesStale(env) {
+  const { state } = await getJSON(env, 'state', { state: null });
+  const symbols = symbolsIn(state);
+  if (!symbols.length) return false;
+  const prices = await getJSON(env, 'prices', {});
+  return symbols.some(s => {
+    const p = prices[s];
+    if (!p) return true;
+    if (p.error) return retryable(p);
+    return Date.now() - new Date(p.checkedAt || p.at || 0) > PRICE_MAX_AGE;
+  });
 }
 
 async function refreshPrices(env, stateOverride = null) {
@@ -419,27 +447,100 @@ async function refreshPrices(env, stateOverride = null) {
   const symbols = symbolsIn(state);
   const prices = await getJSON(env, 'prices', {});
   await Promise.allSettled(symbols.map(async s => {
-    try { prices[s] = await fetchYahoo(s); } catch (e) {
-      // Onthoud de fout, zodat niet bij elke opslag opnieuw wordt geprobeerd.
-      if (!prices[s]?.price) prices[s] = { error: String(e.message).slice(0, 100), at: new Date().toISOString() };
+    try { prices[s] = await fetchQuote(s, prices[s]?.symbol); } catch (e) {
+      // Laatste koers bewaren; een fout enkel tonen als er nog nooit een koers was.
+      if (prices[s]?.price) prices[s] = { ...prices[s], stale: true, checkedAt: new Date().toISOString() };
+      else prices[s] = { error: String(e.message).slice(0, 100), at: new Date().toISOString() };
     }
   }));
   for (const s of Object.keys(prices)) if (!symbols.includes(s)) delete prices[s];
   await putJSON(env, 'prices', prices);
 }
 
-async function fetchYahoo(s) {
-  const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(s)}?range=1d&interval=1d`, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MijnVermogen/1.0)', Accept: 'application/json' },
-  });
-  if (!res.ok) throw new Error(`${s}: ${res.status}`);
-  const meta = (await res.json())?.chart?.result?.[0]?.meta;
+/**
+ * Koers voor wat de gebruiker invulde: een Yahoo-ticker (VWCE.DE), een ticker zonder beurs (VWCE),
+ * een ISIN (IE00BK5BQT80) of een naam (Apple). Het gevonden Yahoo-symbool wordt onthouden.
+ */
+async function fetchQuote(input, known = null) {
+  if (known) {
+    try { return await fetchYahoo(known, input); } catch { /* opnieuw zoeken */ }
+  }
+  let firstErr = null;
+  if (/^[A-Z0-9^=.\-]+$/.test(input)) {
+    try { return await fetchYahoo(input, input); } catch (e) {
+      if (e.status === 429) throw e;
+      firstErr = e;
+    }
+  }
+  for (const sym of await searchYahoo(input)) {
+    if (sym === input) continue;
+    try { return await fetchYahoo(sym, input); } catch { /* volgende kandidaat */ }
+  }
+  if (firstErr && firstErr.status !== 404) throw firstErr;
+  throw new Error(`${input}: niet gevonden`);
+}
+
+async function yahooGet(path) {
+  let last;
+  for (const host of YAHOO_HOSTS) {
+    const res = await fetch(host + path, { headers: YAHOO_HEADERS });
+    if (res.ok) return res.json();
+    last = res;
+    // Enkel bij een blokkade of serverfout de andere server proberen.
+    if (res.status !== 429 && res.status < 500) break;
+  }
+  const e = new Error(last.status === 404 ? 'niet gevonden' : `Yahoo ${last.status}`);
+  e.status = last.status;
+  throw e;
+}
+
+async function fetchYahoo(s, input = s) {
+  let data;
+  try {
+    data = await yahooGet(`/v8/finance/chart/${encodeURIComponent(s)}?range=1d&interval=1d`);
+  } catch (e) {
+    e.message = `${input}: ${e.message}`;
+    throw e;
+  }
+  const meta = data?.chart?.result?.[0]?.meta;
   let price = Number(meta?.regularMarketPrice);
   let currency = meta?.currency || 'EUR';
-  if (!(price > 0)) throw new Error(`${s}: geen koers`);
+  if (!(price > 0)) throw new Error(`${input}: niet gevonden`);
   // Londense noteringen staan in pence.
   if (currency === 'GBp' || currency === 'GBX') { price /= 100; currency = 'GBP'; }
-  return { price, currency, at: new Date().toISOString() };
+  const out = { price, currency, at: new Date().toISOString() };
+  const prev = Number(meta.chartPreviousClose ?? meta.previousClose);
+  if (prev > 0) out.change = (meta.regularMarketPrice - prev) / prev;
+  if (s !== input) out.symbol = s;
+  const name = meta.shortName || meta.longName;
+  if (name) out.name = String(name).slice(0, 80);
+  if (meta.regularMarketTime) out.marketTime = new Date(meta.regularMarketTime * 1000).toISOString();
+  return out;
+}
+
+/** Kandidaat-symbolen voor een ISIN, naam of ticker zonder beurs, beste eerst. */
+async function searchYahoo(q) {
+  let data;
+  try {
+    data = await yahooGet(`/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0&listsCount=0`);
+  } catch { return []; }
+  const quotes = (data?.quotes || []).filter(x => x.symbol && (!x.quoteType || QUOTE_TYPES.includes(x.quoteType)));
+  const base = q.split('.')[0];
+  const prefer = /^US[A-Z0-9]{10}$/.test(q) ? [...US_EXCHANGES, ...EU_EXCHANGES]
+    : /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(q) ? EU_EXCHANGES
+    : [...US_EXCHANGES, ...EU_EXCHANGES];
+  const rank = x => {
+    let r = prefer.indexOf(x.exchange);
+    if (r < 0) r = 50;
+    // Ticker zonder beurs (VWCE): exacte ticker eerst.
+    if (x.symbol.split('.')[0] === base) r -= 100;
+    return r;
+  };
+  return quotes
+    .map((x, i) => ({ s: x.symbol, r: rank(x), i }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .slice(0, 4)
+    .map(x => x.s);
 }
 
 async function refreshRates(env) {

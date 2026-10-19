@@ -135,10 +135,11 @@ async function persist() {
   try {
     const res = await api('/api/state', { method: 'PUT', body: { rev: remote.rev, state } });
     dirty = false;
-    const hadNewSymbols = Object.keys(res.prices || {}).length !== Object.keys(remote.prices || {}).length;
+    const pricesChanged = res.prices && JSON.stringify(res.prices) !== JSON.stringify(remote.prices);
     remote.rev = res.rev;
     remote.prices = res.prices || remote.prices;
-    if (hadNewSymbols) render();
+    // Nieuwe koersen veranderen de waarde: momentopname bijwerken en tonen.
+    if (pricesChanged) recordSnapshot() ? save() : render();
   } catch (e) {
     if (e.status === 409) {
       dirty = false;
@@ -171,6 +172,27 @@ function holdingsEur(acc) {
     const q = holdingQuote(h, acc);
     return s + h.qty * q.price * rate(q.currency);
   }, 0);
+}
+
+/** Uitleg bij een positie: welke koers gevonden werd, of waarom niet. */
+function quoteStatus(symbol) {
+  if (!symbol) return { text: '' };
+  const p = remote.prices[symbol];
+  if (!p) return { text: 'Koers wordt opgezocht na bewaren…' };
+  if (p.error) return { text: `⚠️ Geen koers gevonden voor ${symbol} — controleer de ticker of ISIN, of vul zelf een koers in.`, warn: true };
+  const parts = [
+    p.symbol ? `${p.symbol}` : null,
+    p.name || null,
+    typeof p.change === 'number' ? `${p.change >= 0 ? '+' : ''}${(p.change * 100).toFixed(2).replace('.', ',')}% vandaag` : null,
+    `${p.stale ? 'laatst gekend' : 'koers'} ${when(p.marketTime || p.at)}`,
+  ].filter(Boolean);
+  return { text: parts.join(' · '), warn: !!p.stale };
+}
+
+/** Moment van de oudste automatische koers van een rekening, of null. */
+function pricesAt(acc) {
+  const ts = acc.holdings.map(h => remote.prices[h.symbol]).filter(p => p?.price > 0).map(p => p.checkedAt || p.at);
+  return ts.length ? ts.sort()[0] : null;
 }
 
 /** Waarde in EUR, met teken (schulden negatief). */
@@ -737,6 +759,8 @@ function accountRow(a) {
   const sub = [
     $('#group-by').value === 'type' ? a.institution : TYPE[a.type].label,
     a.holdings.length ? `${a.holdings.length} ${a.holdings.length === 1 ? 'positie' : 'posities'}` : null,
+    a.holdings.length && pricesAt(a) ? `koersen ${when(pricesAt(a))}` : null,
+    a.holdings.some(h => remote.prices[h.symbol]?.error) ? '⚠️ koers niet gevonden' : null,
     a.bonus ? `excl. ${moneyIn(a.bonus, a.currency)} bonus${a.bonusPct ? ` (${a.bonusPct}%)` : ''}` : null,
     a.linked ? `🔗 ${when(a.updatedAt)}` : `bijgewerkt ${fmtDate.format(new Date(a.updatedAt))}`,
     a.note || null,
@@ -841,6 +865,7 @@ function renderHoldings() {
   const accLike = { currency: form.currency.value };
   for (const h of draftHoldings) {
     const valueEl = el('span', { class: 'h-value money' });
+    const statusEl = el('span', { class: 'h-status' });
     const priceInput = el('input', { type: 'number', step: 'any', value: h.price || '', 'aria-label': 'Koers', placeholder: 'koers',
       oninput: e => { h.price = Number(e.target.value) || 0; update(); } });
     function update() {
@@ -849,17 +874,21 @@ function renderHoldings() {
       if (q.auto) priceInput.value = round2(q.price);
       priceInput.title = q.auto ? `Automatische koers (${q.currency})` : 'Koers zelf invullen';
       valueEl.textContent = moneyIn(h.qty * q.price, q.currency);
+      const st = quoteStatus(h.symbol);
+      statusEl.textContent = st.text;
+      statusEl.className = `h-status${st.warn ? ' warn' : ''}`;
     }
     update();
     box.append(el('div', { class: 'holding' },
-      el('input', { class: 'h-name', value: h.symbol, placeholder: 'bv. VWCE.DE', 'aria-label': 'Ticker', autocapitalize: 'characters',
-        oninput: e => { h.symbol = e.target.value.trim().toUpperCase(); update(); } }),
+      el('input', { class: 'h-name', value: h.symbol, placeholder: 'ticker of ISIN', 'aria-label': 'Ticker', autocapitalize: 'characters',
+        oninput: e => { h.symbol = e.target.value.trim().toUpperCase().replace(/\s+/g, ' '); update(); } }),
       el('input', { type: 'number', step: 'any', value: h.qty, 'aria-label': 'Aantal',
         oninput: e => { h.qty = Number(e.target.value) || 0; update(); } }),
       priceInput,
       valueEl,
       el('button', { type: 'button', class: 'remove', title: 'Verwijder positie', 'aria-label': 'Verwijder positie',
-        onclick: () => { draftHoldings = draftHoldings.filter(x => x !== h); renderHoldings(); } }, '×')
+        onclick: () => { draftHoldings = draftHoldings.filter(x => x !== h); renderHoldings(); } }, '×'),
+      statusEl
     ));
   }
 }
