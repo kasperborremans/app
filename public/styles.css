@@ -653,3 +653,5 @@ a.btn { text-decoration: none; }
   .tx-ico { width: 34px; height: 34px; border-radius: 10px; }
   .tx-sub { white-space: normal; }
 }
+.bonus-box { display: flex; flex-direction: column; gap: 6px; }
+.bonus-box #bonus-preview { margin: 0; line-height: 1.6; }

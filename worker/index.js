@@ -400,7 +400,8 @@ async function mfxCall(env, method, params) {
   return res.json();
 }
 
-async function mfxAccounts(env) {
+/** Roept een Myfxbook-methode aan met een (hergebruikte) sessie; meldt opnieuw aan als die verlopen is. */
+async function mfxGet(env, method, params = {}) {
   if (!env.MYFXBOOK_EMAIL || !env.MYFXBOOK_PASSWORD) {
     throw httpError(400, 'Myfxbook is nog niet ingesteld (MYFXBOOK_EMAIL / MYFXBOOK_PASSWORD).');
   }
@@ -413,13 +414,27 @@ async function mfxAccounts(env) {
       try { session = decodeURIComponent(login.session); } catch { session = login.session; }
       await env.KV.put('mfx-session', session, { expirationTtl: 30 * 86400 });
     }
-    const data = await mfxCall(env, 'get-my-accounts', { session });
-    if (!data.error) return { accounts: data.accounts || [], session };
+    const data = await mfxCall(env, method, { session, ...params });
+    if (!data.error) return data;
     if (!/session/i.test(data.message || '')) throw httpError(502, `Myfxbook: ${data.message}`);
     await env.KV.delete('mfx-session');
     session = null;
   }
   throw httpError(502, 'Myfxbook: sessie ongeldig.');
+}
+
+async function mfxAccounts(env) {
+  return (await mfxGet(env, 'get-my-accounts')).accounts || [];
+}
+
+/** Som van de winst/verlies van alle open trades; null als dat niet op te halen is. */
+async function mfxOpenProfit(env, id) {
+  try {
+    const data = await mfxGet(env, 'get-open-trades', { id });
+    return (data.openTrades || []).reduce((s, t) => s + (Number(t.profit) || 0), 0);
+  } catch {
+    return null;
+  }
 }
 
 function mfxInstitution(accounts) {
@@ -439,16 +454,24 @@ async function mfxAdd(env, origin) {
 }
 
 async function refreshMfx(env, conn) {
-  const { accounts, session } = await mfxAccounts(env);
+  const accounts = await mfxAccounts(env);
   conn.institution = mfxInstitution(accounts);
   const previous = new Map((conn.accounts || []).map(a => [a.key, a]));
-  conn.accounts = accounts.map(a => ({
+  // Open winst/verlies apart ophalen: equity = saldo + credit + open winst/verlies,
+  // dus zonder dit getal is de credit (bonus) niet van de open winst te onderscheiden.
+  const openProfit = await Promise.all(accounts.map(a => (a.demo ? null : mfxOpenProfit(env, a.id))));
+  conn.accounts = accounts.map((a, i) => ({
     key: `mfx:${a.id}`,
     name: a.name || `Account ${a.accountId || a.id}`,
-    // Equity = saldo + open winst/verlies.
+    // Equity zoals de broker die toont (inclusief credit/bonus).
     balance: Number(a.equity ?? a.balance),
+    // Saldo in MetaTrader: hier zit de credit nooit in.
     cashBalance: Number(a.balance),
+    openProfit: openProfit[i],
     credit: a.credit != null ? Number(a.credit) || 0 : null,
+    // Stortingen/opnames: nodig om de bonus (een % van de stortingen) te berekenen.
+    deposits: a.deposits != null ? Number(a.deposits) || 0 : null,
+    withdrawals: Number(a.withdrawals) || 0,
     currency: a.currency || 'USD',
     server: a.server?.name || null,
     demo: !!a.demo,
@@ -461,8 +484,7 @@ async function refreshMfx(env, conn) {
     if (prev?.transactions) acc.transactions = prev.transactions;
     if (acc.demo) continue;
     await keepTx(acc, async () => {
-      const data = await mfxCall(env, 'get-history', { session, id: acc.mfxId });
-      if (data.error) throw new Error(`Myfxbook: ${data.message || 'geschiedenis niet beschikbaar'}`);
+      const data = await mfxGet(env, 'get-history', { id: acc.mfxId });
       return (data.history || []).map(h => mfxHistoryTx(h, acc.currency)).filter(Boolean);
     });
   }

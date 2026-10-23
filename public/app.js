@@ -210,9 +210,14 @@ function bonusPctFor(a, meta, institution) {
 
 /**
  * Saldo en munt van een gekoppelde rekening: omgerekend als het een cent-account is,
- * en zonder bonus van de broker (dat is geen eigen geld).
- * Met een bonuspercentage tonen we bedrag / (1 + bonus%); anders trekken we de
- * credit af die de koppeling eventueel doorgeeft.
+ * en zonder bonus/credit van de broker (dat is geen eigen geld).
+ *
+ * In MetaTrader is equity = saldo + credit + open winst/verlies, en zit de credit nooit
+ * in het saldo. Volgorde, van exact naar geschat:
+ *  1. credit bekend (MetaApi)            → echt geld = equity − credit
+ *  2. saldo bekend (Myfxbook)            → echt geld = saldo + open winst/verlies
+ *  3. bonus% en stortingen bekend        → echt geld = equity − bonus% × netto stortingen
+ *  4. enkel bonus%                       → echt geld = equity ÷ (1 + bonus%)
  */
 function linkedAmount(a, meta, institution) {
   const cent = meta.cent ?? isCentAuto(a);
@@ -220,11 +225,38 @@ function linkedAmount(a, meta, institution) {
   const cur = String(a.currency || 'EUR');
   const gross = (Number(a.balance) || 0) / div;
   const bonusPct = bonusPctFor(a, meta, institution);
-  const balance = bonusPct > 0 ? gross / (1 + bonusPct / 100) : gross - (Number(a.credit) || 0) / div;
+  const deposits = a.deposits != null ? (Number(a.deposits) || 0) / div : null;
+  const withdrawals = (Number(a.withdrawals) || 0) / div;
+  const cashBalance = a.cashBalance != null && !Number.isNaN(Number(a.cashBalance)) ? Number(a.cashBalance) / div : null;
+  const openProfit = a.openProfit != null ? Number(a.openProfit) / div : null;
+  let bonus, method;
+  if (a.credit != null) {
+    bonus = (Number(a.credit) || 0) / div;
+    method = 'credit';
+  } else if (cashBalance != null && a.balance != null) {
+    bonus = Math.max(0, gross - (cashBalance + (openProfit ?? 0)));
+    method = 'balance';
+  } else if (bonusPct > 0 && deposits > 0) {
+    bonus = (bonusPct / 100) * Math.max(0, deposits - withdrawals);
+    method = 'deposits';
+  } else if (bonusPct > 0) {
+    bonus = gross - gross / (1 + bonusPct / 100);
+    method = 'ratio';
+  } else {
+    bonus = 0;
+    method = null;
+  }
   return {
-    balance,
-    bonus: gross - balance,
-    bonusPct,
+    balance: gross - bonus,
+    gross,
+    bonus,
+    bonusPct: method === 'deposits' || method === 'ratio' ? bonusPct : 0,
+    exact: method === 'credit' || method === 'balance',
+    cashBalance,
+    openProfit,
+    deposits,
+    withdrawals,
+    method,
     currency: cent ? CENT_CURRENCIES[cur.toUpperCase()] || cur : cur,
     cent,
   };
@@ -1040,9 +1072,31 @@ function syncCreditHint() {
   const draft = { cent: form.cent.checked, bonusPct: Math.max(0, Number(String(form.bonusPct.value).replace(',', '.')) || 0) };
   const amt = linkedAmount(editing.raw, draft, editing.institution);
   form.balance.value = round2(amt.balance);
-  $('#bonus-preview').textContent = amt.bonus
-    ? `Broker toont ${moneyIn(amt.balance + amt.bonus, amt.currency)} → echt geld ${moneyIn(amt.balance, amt.currency)}`
-    : '';
+  const m = v => moneyIn(v, amt.currency);
+  const lines = [];
+  $('#bonus-pct-wrap').hidden = amt.exact;
+  if (amt.method === 'balance') {
+    lines.push(
+      `Saldo (zonder credit) ${m(amt.cashBalance)}`,
+      amt.openProfit == null ? 'Open winst/verlies: nog niet opgehaald (tik op ↻ Vernieuwen)' : `Open winst/verlies ${m(amt.openProfit)}`,
+      `Credit/bonus ${m(amt.bonus)} (telt niet mee)`,
+      `Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`,
+    );
+  } else if (amt.method === 'credit') {
+    lines.push(`Credit/bonus ${m(amt.bonus)} (telt niet mee)`, `Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`);
+  } else if (amt.method === 'deposits') {
+    const net = amt.deposits - amt.withdrawals;
+    lines.push(
+      `Gestort ${m(amt.deposits)}` + (amt.withdrawals ? ` − opgenomen ${m(amt.withdrawals)}` : ''),
+      `Bonus ${amt.bonusPct}% van ${m(net)} = ${m(amt.bonus)}`,
+      `Winst/verlies ${m(amt.balance - net)}`,
+      `Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`,
+    );
+  } else if (amt.bonus) {
+    lines.push(`Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`);
+    if (amt.method === 'ratio') lines.push('Stortingen onbekend: geschat als bedrag ÷ ' + (1 + amt.bonusPct / 100).toLocaleString('nl-BE'));
+  }
+  $('#bonus-preview').replaceChildren(...lines.flatMap((l, i) => (i ? [el('br'), l] : [l])));
 }
 
 form.cent.addEventListener('change', syncCreditHint);
