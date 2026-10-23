@@ -404,13 +404,18 @@ function render() {
   renderDelta(t.net, accounts.length);
   renderSyncStatus();
   renderAlerts();
+  renderConnections();
+  renderProviders();
+  renderRates();
+  renderAccountsSummary(t, accounts);
+  renderAccounts(accounts);
 
   if (!hasAccounts) return;
   renderTiles(t, accounts);
   renderAllocation(t);
   renderInstitutions(accounts);
-  renderHistory();
-  renderAccounts(accounts);
+  if (route === 'overzicht') renderHistory();
+  renderTopAccounts(accounts);
 }
 
 function renderDelta(net, count) {
@@ -434,12 +439,13 @@ function renderDelta(net, count) {
 
 function renderSyncStatus() {
   const times = remote.connections.map(c => c.checkedAt).filter(Boolean).sort();
-  $('#sync-status').textContent = times.length ? `Saldi opgehaald: ${when(times[times.length - 1])}` : '';
+  const text = times.length ? `Saldi opgehaald: ${when(times[times.length - 1])}` : '';
+  $('#sync-status').textContent = text;
+  $('#sidebar-sync').textContent = text;
 }
 
-function renderAlerts() {
-  const box = $('#alerts');
-  box.replaceChildren();
+/** Koppelingen met een probleem of een toestemming die binnenkort verloopt. */
+function connectionProblems() {
   const problems = [];
   for (const c of remote.connections) {
     if (c.error) problems.push({ c, msg: c.error });
@@ -448,7 +454,17 @@ function renderAlerts() {
       if (days <= 14) problems.push({ c, msg: `Toestemming verloopt over ${Math.max(days, 0)} dag(en).` });
     }
   }
+  return problems;
+}
+
+function renderAlerts() {
+  const box = $('#alerts');
+  box.replaceChildren();
+  const problems = connectionProblems();
   box.hidden = !problems.length;
+  const badge = $('#nav-conn-badge');
+  badge.hidden = !problems.length;
+  badge.textContent = problems.length;
   for (const p of problems) {
     box.append(el('div', { class: 'alert-row' },
       el('span', {}, '⚠️ ', el('strong', {}, p.c.institution), ` — ${p.msg}`),
@@ -702,6 +718,10 @@ function attachTooltip(node, rowsFn) {
 function renderAccounts(accounts) {
   const box = $('#accounts');
   box.replaceChildren();
+  if (!accounts.length) {
+    box.append(el('p', { class: 'hint' }, 'Nog geen rekeningen. Voeg er een toe of koppel je bank of broker.'));
+    return;
+  }
   const mode = $('#group-by').value;
   const groups = new Map();
   if (mode === 'type') {
@@ -727,15 +747,35 @@ function renderAccounts(accounts) {
           title),
         el('span', { class: 'money' + (sum < 0 ? ' neg-val' : '') }, money(sum))
       ),
-      accs.map(accountRow)
+      accs.map(a => accountRow(a, mode))
     ));
   }
 }
 
-function accountRow(a) {
+function renderTopAccounts(accounts) {
+  const top = [...accounts].sort((x, y) => Math.abs(eurValue(y)) - Math.abs(eurValue(x))).slice(0, 5);
+  $('#top-accounts').replaceChildren(...top.map(a => accountRow(a)));
+}
+
+function renderAccountsSummary(t, accounts) {
+  const linked = accounts.filter(a => a.linked).length;
+  const insts = new Set(accounts.map(a => a.institution).filter(Boolean)).size;
+  const stat = (label, value, isMoney) => el('div', { class: 'stat' },
+    el('div', { class: 'label' }, label),
+    el('div', { class: 'stat-value' + (isMoney ? ' money' : '') }, value));
+  $('#accounts-summary').replaceChildren(
+    stat('Netto vermogen', money(t.net), true),
+    stat('Rekeningen', accounts.length),
+    stat('Automatisch gekoppeld', linked),
+    stat('Banken & brokers', insts),
+  );
+}
+
+/** mode 'type': toon de instelling als ondertitel; 'institution': toon de categorie. */
+function accountRow(a, mode = 'type') {
   const v = eurValue(a);
   const sub = [
-    $('#group-by').value === 'type' ? a.institution : TYPE[a.type].label,
+    mode === 'type' ? a.institution : TYPE[a.type].label,
     a.holdings.length ? `${a.holdings.length} ${a.holdings.length === 1 ? 'positie' : 'posities'}` : null,
     a.bonus ? `excl. ${moneyIn(a.bonus, a.currency)} bonus${a.bonusPct ? ` (${a.bonusPct}%)` : ''}` : null,
     a.linked ? `🔗 ${when(a.updatedAt)}` : `bijgewerkt ${fmtDate.format(new Date(a.updatedAt))}`,
@@ -925,26 +965,36 @@ const metaDlg = $('#meta-dialog');
 const mfxDlg = $('#mfx-dialog');
 let aspspCache = {};
 
+const LINK_OPTIONS = [
+  { id: 'bank', title: '🏦 Bank', text: 'Argenta, Revolut, KBC, Belfius, ING, … via open banking', start: chooseBank },
+  { id: 'mfx', title: '📈 MetaTrader-broker via Myfxbook (gratis)', text: 'VT Markets en andere MT4/MT5-brokers, met je investor password', start: chooseMfx },
+  { id: 'meta', title: '📈 MetaTrader-broker via MetaApi (betalend)', text: 'Alternatief als Myfxbook niet werkt', start: chooseMeta },
+  { id: 'manual', title: '✍️ Zelf bijhouden', text: 'Bv. Lightyear: vul je posities in, de koersen worden automatisch opgehaald', start: () => openAccountDialog() },
+];
+
+// Dezelfde keuzes staan in het koppelvenster en op de pagina Koppelingen.
+for (const box of document.querySelectorAll('[data-choices]')) {
+  box.replaceChildren(...LINK_OPTIONS.map(o => el('button', { type: 'button', class: 'choice', onclick: () => {
+    if (linkDlg.open) linkDlg.close();
+    o.start();
+  } }, el('strong', {}, o.title), el('span', {}, o.text))));
+}
+
 function openLinkChooser() {
-  $('#settings-dialog').close();
   linkDlg.showModal();
 }
 
-$('#btn-link').addEventListener('click', openLinkChooser);
-$('#btn-link-empty').addEventListener('click', openLinkChooser);
-$('#choose-manual').addEventListener('click', () => { linkDlg.close(); openAccountDialog(); });
-$('#choose-meta').addEventListener('click', () => {
-  linkDlg.close();
+function chooseMeta() {
   if (!remote.config.metaApi) return toast('MetaApi is nog niet ingesteld op de server (METAAPI_TOKEN). Zie README.', true);
   $('#meta-error').hidden = true;
   metaDlg.showModal();
-});
-$('#choose-mfx').addEventListener('click', () => {
-  linkDlg.close();
+}
+
+function chooseMfx() {
   $('#mfx-error').hidden = !!remote.config.myfxbook;
   $('#mfx-error').textContent = remote.config.myfxbook ? '' : 'Let op: MYFXBOOK_EMAIL en MYFXBOOK_PASSWORD zijn nog niet ingesteld in Cloudflare (stap 3).';
   mfxDlg.showModal();
-});
+}
 $('#mfx-cancel').addEventListener('click', () => mfxDlg.close());
 $('#mfx-form').addEventListener('submit', async e => {
   e.preventDefault();
@@ -962,12 +1012,11 @@ $('#mfx-form').addEventListener('submit', async e => {
     btn.disabled = false;
   }
 });
-$('#choose-bank').addEventListener('click', async () => {
-  linkDlg.close();
+async function chooseBank() {
   if (!remote.config.enableBanking) return toast('Enable Banking is nog niet ingesteld op de server (EB_APP_ID / EB_PRIVATE_KEY). Zie README.', true);
   bankDlg.showModal();
   await loadBanks();
-});
+}
 
 async function loadBanks() {
   const country = $('#bank-country').value;
@@ -1027,9 +1076,8 @@ $('#meta-form').addEventListener('submit', async e => {
 });
 
 async function refreshNow() {
-  const btn = $('#btn-refresh');
-  btn.disabled = true;
-  btn.classList.add('spinning');
+  const btns = document.querySelectorAll('.js-refresh');
+  for (const b of btns) { b.disabled = true; b.classList.add('spinning'); }
   try {
     applyRemote(await api('/api/refresh', { method: 'POST' }));
     save();
@@ -1037,29 +1085,34 @@ async function refreshNow() {
   } catch (e) {
     if (e.message !== 'Niet aangemeld') toast(`Vernieuwen mislukt: ${e.message}`, true);
   } finally {
-    btn.disabled = false;
-    btn.classList.remove('spinning');
+    for (const b of btns) { b.disabled = false; b.classList.remove('spinning'); }
   }
 }
-$('#btn-refresh').addEventListener('click', refreshNow);
+for (const b of document.querySelectorAll('.js-refresh')) b.addEventListener('click', refreshNow);
 
-/* ---------- Settings ---------- */
+/* ---------- Koppelingen ---------- */
 
-const sdlg = $('#settings-dialog');
+const KIND_LABEL = { eb: 'Bank · Enable Banking', myfxbook: 'MetaTrader · Myfxbook', metaapi: 'MetaTrader · MetaApi' };
 
 function renderConnections() {
   const box = $('#connections');
   box.replaceChildren();
   if (!remote.connections.length) {
-    box.append(el('p', { class: 'hint' }, 'Nog niets gekoppeld.'));
+    box.append(el('p', { class: 'hint' }, 'Nog niets gekoppeld. Kies hieronder een bank of broker om te koppelen.'));
   }
   for (const c of remote.connections) {
     const days = c.validUntil ? Math.ceil((new Date(c.validUntil) - Date.now()) / 864e5) : null;
+    const status = c.error ? ['bad', 'Fout'] : days != null && days <= 14 ? ['warn', 'Verloopt binnenkort'] : ['good', 'Actief'];
     box.append(el('div', { class: 'conn' },
       el('div', { class: 'conn-head' },
-        el('strong', {}, c.institution),
-        el('span', { class: 'hint' }, `opgehaald ${when(c.checkedAt)}` + (days != null ? ` · toestemming nog ${Math.max(days, 0)} d` : '')),
+        el('span', { class: 'conn-title' },
+          el('span', { class: 'acc-ico', 'aria-hidden': 'true' }, (c.institution || '?').charAt(0).toUpperCase()),
+          el('span', {},
+            el('strong', {}, c.institution),
+            el('span', { class: 'hint block' }, KIND_LABEL[c.kind] || c.kind))),
+        el('span', { class: `pill ${status[0]}` }, status[1]),
       ),
+      el('p', { class: 'hint' }, `Opgehaald ${when(c.checkedAt)}` + (days != null ? ` · toestemming nog ${Math.max(days, 0)} dagen geldig` : '')),
       c.error ? el('p', { class: 'form-error' }, c.error) : null,
       (c.accounts || []).map(a => {
         const meta = state.linkedMeta[a.key] || {};
@@ -1078,12 +1131,25 @@ function renderConnections() {
       )
     ));
   }
+}
+
+function renderProviders() {
   const cfg = remote.config || {};
+  const rows = [
+    ['Enable Banking', 'Banken via open banking', cfg.enableBanking, 'EB_APP_ID, EB_PRIVATE_KEY'],
+    ['Myfxbook', 'MetaTrader-brokers (gratis)', cfg.myfxbook, 'MYFXBOOK_EMAIL, MYFXBOOK_PASSWORD'],
+    ['MetaApi', 'MetaTrader-brokers (betalend)', cfg.metaApi, 'METAAPI_TOKEN'],
+  ];
+  $('#providers').replaceChildren(...rows.map(([name, desc, ok, secrets]) => el('li', {},
+    el('span', {}, el('strong', {}, name), el('span', { class: 'hint block' }, ok ? desc : `${desc} — secrets: ${secrets}`)),
+    el('span', { class: `pill ${ok ? 'good' : 'muted'}` }, ok ? 'Ingesteld' : 'Niet ingesteld')
+  )));
   $('#config-status').replaceChildren(
-    `Enable Banking: ${cfg.enableBanking ? '✅ ingesteld' : '❌ niet ingesteld'} · Myfxbook: ${cfg.myfxbook ? '✅ ingesteld' : '❌ niet ingesteld'} · MetaApi: ${cfg.metaApi ? '✅ ingesteld' : '❌ niet ingesteld'}`,
-    cfg.redirectUrl ? el('span', { class: 'block' }, 'Redirect-URL voor Enable Banking: ', el('code', {}, cfg.redirectUrl)) : null
+    cfg.redirectUrl ? el('span', {}, 'Redirect-URL voor Enable Banking: ', el('code', {}, cfg.redirectUrl)) : ''
   );
 }
+
+/* ---------- Instellingen ---------- */
 
 function maskIban(iban) {
   return iban.length > 8 ? `${iban.slice(0, 4)} •••• ${iban.slice(-4)}` : iban;
@@ -1093,7 +1159,6 @@ async function removeConnection(c) {
   if (!confirm(`${c.institution} ontkoppelen?`)) return;
   try {
     applyRemote(await api(`/api/connections/${encodeURIComponent(c.id)}`, { method: 'DELETE' }));
-    renderConnections();
     save();
   } catch (e) {
     toast(e.message, true);
@@ -1117,21 +1182,19 @@ function renderRates() {
         'aria-label': `Koers ${code}`,
         onchange: e => { const v = Number(e.target.value); if (v > 0) { state.rates[code] = v; save(); } } }),
       el('button', { type: 'button', class: 'remove', title: inUse ? 'In gebruik' : 'Verwijder', disabled: inUse ? '' : false,
-        onclick: () => { delete state.rates[code]; save(); renderRates(); } }, '×')
+        onclick: () => { delete state.rates[code]; save(); } }, '×')
     ));
   }
 }
 
 const round4 = n => Math.round(n * 10000) / 10000;
 
-$('#btn-settings').addEventListener('click', () => { renderConnections(); renderRates(); sdlg.showModal(); });
 $('#btn-add-rate').addEventListener('click', () => {
   const code = $('#new-rate-code').value.trim().toUpperCase();
   if (!/^[A-Z]{3,5}$/.test(code) || state.rates[code]) return;
   state.rates[code] = 1;
   $('#new-rate-code').value = '';
   save();
-  renderRates();
 });
 
 $('#btn-export').addEventListener('click', () => {
@@ -1151,7 +1214,6 @@ $('#import-file').addEventListener('change', async e => {
     if (!confirm('Huidige gegevens vervangen door de geïmporteerde back-up?')) return;
     state = normalizeState(parsed);
     save();
-    renderRates();
   } catch {
     alert('Ongeldig bestand.');
   } finally {
@@ -1163,13 +1225,15 @@ $('#btn-reset').addEventListener('click', () => {
   if (!confirm('Alle zelf toegevoegde rekeningen en de geschiedenis wissen? Koppelingen blijven bestaan.')) return;
   state = emptyState();
   save();
-  sdlg.close();
+  navigate('overzicht');
 });
 
-$('#btn-logout').addEventListener('click', async () => {
+async function logout() {
   await api('/api/logout', { method: 'POST' }).catch(() => {});
   showLogin();
-});
+}
+$('#btn-logout').addEventListener('click', logout);
+$('#btn-logout-side').addEventListener('click', logout);
 
 /* ---------- Demo data ---------- */
 
@@ -1203,7 +1267,7 @@ $('#btn-demo').addEventListener('click', loadDemo);
 /* ---------- Top bar ---------- */
 
 $('#btn-add').addEventListener('click', openLinkChooser);
-$('#btn-add-empty').addEventListener('click', () => openAccountDialog());
+for (const b of document.querySelectorAll('.js-add-manual')) b.addEventListener('click', () => openAccountDialog());
 $('#group-by').addEventListener('change', () => renderAccounts(allAccounts()));
 
 $('#range-seg').addEventListener('click', e => {
@@ -1214,18 +1278,23 @@ $('#range-seg').addEventListener('click', e => {
   renderHistory();
 });
 
+/** theme: 'light', 'dark' of null (volg het toestel). */
 function applyTheme(theme) {
-  if (theme) document.documentElement.setAttribute('data-theme', theme);
+  if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
   else document.documentElement.removeAttribute('data-theme');
+  const opt = document.documentElement.getAttribute('data-theme') || 'system';
+  for (const b of $('#theme-seg').querySelectorAll('button')) b.classList.toggle('active', b.dataset.themeOpt === opt);
 }
-function currentTheme() {
-  return document.documentElement.getAttribute('data-theme')
-    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-}
-$('#btn-theme').addEventListener('click', () => {
-  const next = currentTheme() === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  try { localStorage.setItem(THEME_KEY, next); } catch { /* */ }
+$('#theme-seg').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  const opt = b.dataset.themeOpt;
+  applyTheme(opt);
+  try {
+    if (opt === 'system') localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, opt);
+  } catch { /* */ }
+  if (route === 'overzicht' && allAccounts().length) renderHistory();
 });
 
 function applyPrivacy(on) {
@@ -1233,29 +1302,73 @@ function applyPrivacy(on) {
   const b = $('#btn-privacy');
   b.setAttribute('aria-pressed', String(on));
   b.querySelector('.lbl').textContent = on ? 'Toon' : 'Verberg';
+  $('#privacy-toggle').checked = on;
 }
+$('#privacy-toggle').addEventListener('change', e => {
+  applyPrivacy(e.target.checked);
+  try { localStorage.setItem(PRIVACY_KEY, e.target.checked ? '1' : '0'); } catch { /* */ }
+});
 $('#btn-privacy').addEventListener('click', () => {
   const on = !document.body.classList.contains('private');
   applyPrivacy(on);
   try { localStorage.setItem(PRIVACY_KEY, on ? '1' : '0'); } catch { /* */ }
 });
 
+/* ---------- Pagina's ---------- */
+
+const PAGES = {
+  overzicht: 'Overzicht',
+  rekeningen: 'Rekeningen',
+  koppelingen: 'Gekoppelde accounts',
+  instellingen: 'Instellingen',
+};
+let route = 'overzicht';
+
+function routeFromHash() {
+  const r = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+  return r in PAGES ? r : 'overzicht';
+}
+
+function navigate(r) {
+  location.hash = r === 'overzicht' ? '#/' : `#/${r}`;
+}
+
+function showRoute() {
+  const prev = route;
+  route = routeFromHash();
+  for (const p of document.querySelectorAll('.page')) p.hidden = p.dataset.page !== route;
+  for (const a of document.querySelectorAll('.nav a')) {
+    if (a.dataset.route === route) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
+  $('#page-title').textContent = PAGES[route];
+  document.title = route === 'overzicht' ? 'Mijn Vermogen' : `${PAGES[route]} – Mijn Vermogen`;
+  // De grafiek meet zijn breedte: pas tekenen als de pagina zichtbaar is.
+  if (route === 'overzicht' && allAccounts().length) renderHistory();
+  if (prev !== route) window.scrollTo(0, 0);
+}
+
+window.addEventListener('hashchange', showRoute);
+
 /* ---------- Init ---------- */
 
+applyTheme(null);
 try { applyTheme(localStorage.getItem(THEME_KEY)); } catch { /* */ }
 try { applyPrivacy(localStorage.getItem(PRIVACY_KEY) === '1'); } catch { /* */ }
 
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (allAccounts().length) renderHistory(); }, 120);
+  resizeTimer = setTimeout(() => { if (route === 'overzicht' && allAccounts().length) renderHistory(); }, 120);
 });
 
 // Terug van de bank?
 const params = new URLSearchParams(location.search);
 if (params.has('linked')) toast(`${params.get('linked')} gekoppeld ✔`);
 if (params.has('link_error')) toast(`Koppelen mislukt: ${params.get('link_error')}`, true);
-if (params.has('linked') || params.has('link_error')) history.replaceState(null, '', location.pathname);
+// Na het koppelen naar de pagina Koppelingen gaan.
+if (params.has('linked') || params.has('link_error')) history.replaceState(null, '', `${location.pathname}#/koppelingen`);
+showRoute();
 
 // Bij terugkeren naar de app (bv. op gsm) de nieuwste data tonen.
 document.addEventListener('visibilitychange', () => {

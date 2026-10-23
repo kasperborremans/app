@@ -7,6 +7,7 @@ Persoonlijk dashboard om al je geld in één oogopslag te zien — op je gsm én
 - **Lightyear** (en andere brokers zonder API): je vult je posities één keer in, de koersen worden automatisch opgehaald
 - Wisselkoersen automatisch van de ECB, alles omgerekend naar euro
 - Verloop van je vermogen over tijd, verdeling per categorie en per instelling
+- Aparte pagina's: **Overzicht**, **Rekeningen**, **Koppelingen** (gekoppelde accounts beheren) en **Instellingen** (thema, wisselkoersen, back-up, afmelden)
 - Beveiligd met een wachtwoord, te installeren als app op je gsm
 
 Saldi worden 4× per dag automatisch opgehaald (het maximum dat banken toelaten zonder dat je zelf inlogt). Met de ↻-knop vernieuw je meteen.
@@ -38,13 +39,13 @@ Open nu je adres: je kan inloggen. Zelf bijgehouden rekeningen (zoals Lightyear)
 1. Maak een gratis account op [enablebanking.com](https://enablebanking.com) en open het **Control Panel**.
 2. **API applications → Register new application**:
    - Environment: **Production**
-   - Redirect URL: `https://<jouw-adres>.workers.dev/api/eb/callback` (staat ook in het dashboard onder ⚙ Instellingen)
+   - Redirect URL: `https://<jouw-adres>.workers.dev/api/eb/callback` (staat ook in het dashboard op de pagina **Koppelingen**)
    - Laat de sleutel in je browser genereren → er wordt een `.pem`-bestand gedownload. **Bewaar dit goed en deel het met niemand.**
 3. Activeer de app door je **eigen rekeningen te koppelen** (zo werkt het gratis: je krijgt enkel toegang tot je eigen rekeningen).
 4. Voeg in Cloudflare twee secrets toe:
    - `EB_APP_ID` = het application-ID (de naam van het `.pem`-bestand, zonder `.pem`)
    - `EB_PRIVATE_KEY` = de volledige inhoud van het `.pem`-bestand (inclusief de `-----BEGIN…`-regels)
-5. In het dashboard: **+ Rekening → 🏦 Bank → Argenta**. Je logt in bij Argenta (app of itsme) en wordt teruggestuurd. Herhaal voor **Revolut** (staat onder België of Litouwen).
+5. In het dashboard: **Koppelingen → 🏦 Bank → Argenta**. Je logt in bij Argenta (app of itsme) en wordt teruggestuurd. Herhaal voor **Revolut** (staat onder België of Litouwen).
 
 De toestemming geldt 180 dagen. Het dashboard waarschuwt je 2 weken op voorhand; dan tik je op **Opnieuw koppelen**.
 
@@ -53,7 +54,7 @@ De toestemming geldt 180 dagen. Het dashboard waarschuwt je 2 weken op voorhand;
 1. Stel in MetaTrader een **investor password** in (enkel lezen): *Extra → Opties → Server → Wijzigen → investor password*.
 2. Maak een gratis account op [myfxbook.com](https://www.myfxbook.com) en kies **Add account → MetaTrader 4/5 → Auto update**. Vul je VT Markets-login, server en het **investor password** in.
 3. Voeg in Cloudflare twee secrets toe: `MYFXBOOK_EMAIL` en `MYFXBOOK_PASSWORD` (je Myfxbook-login).
-4. In het dashboard: **+ Rekening → 📈 MetaTrader-broker via Myfxbook → Koppelen**.
+4. In het dashboard: **Koppelingen → 📈 MetaTrader-broker via Myfxbook → Koppelen**.
 
 Het dashboard toont de **equity** (saldo + open winst/verlies). Demo-accounts worden standaard verborgen.
 
