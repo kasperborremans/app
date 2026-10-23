@@ -189,11 +189,13 @@
         <span><b>Cent-account</b> — bedragen staan in centen (bv. 10.000 = 100 dollar) en worden gedeeld door 100</span>
       </label>
 
-      <label id="credit-label" hidden>Bonus van de broker (%)
-        <input name="bonusPct" type="number" min="0" step="any" inputmode="decimal" autocomplete="off">
-        <span class="hint">Bij 20% bonus is wat de broker toont 120%; het dashboard toont enkel de 100% echt geld. 0 = geen bonus.</span>
-        <span class="hint" id="bonus-preview"></span>
-      </label>
+      <div id="credit-label" class="bonus-box" hidden>
+        <label id="bonus-pct-wrap">Bonus van de broker (%)
+          <input name="bonusPct" type="number" min="0" step="any" inputmode="decimal" autocomplete="off">
+          <span class="hint">Enkel gebruikt als de broker geen saldo zonder credit doorgeeft. 0 = geen bonus.</span>
+        </label>
+        <p class="hint" id="bonus-preview"></p>
+      </div>
 
       <label class="span-2" id="note-label">Notitie
         <input name="note" placeholder="optioneel">

@@ -197,6 +197,10 @@ test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity g
       return ok({ error: false, message: '', session: validSession });
     }
     if (u.searchParams.get('session') !== validSession) return ok({ error: true, message: 'Invalid session.' });
+    if (u.pathname.endsWith('/get-open-trades.json')) {
+      assert.equal(u.searchParams.get('id'), '111', 'geen open trades opvragen voor demo-accounts');
+      return ok({ error: false, openTrades: [{ profit: 12.5 }, { profit: -2.5 }] });
+    }
     return ok({ error: false, accounts: [
       { id: 111, name: 'VT live', accountId: 81234567, balance: 2000, equity: 2150.25, credit: 300, deposits: 1800, withdrawals: 100, currency: 'USD', demo: false, lastUpdateDate: '10/17/2026 09:30', server: { name: 'VTMarkets-Live 3' } },
       { id: 222, name: 'VT demo', balance: 100000, equity: 100000, currency: 'USD', demo: true, server: { name: 'VTMarkets-Demo' } },
@@ -210,6 +214,9 @@ test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity g
   assert.equal(c.accounts[0].updatedAt, '2026-10-17T09:30:00.000Z');
   assert.equal(c.accounts[0].credit, 300);
   assert.deepEqual([c.accounts[0].deposits, c.accounts[0].withdrawals], [1800, 100]);
+  assert.equal(c.accounts[0].cashBalance, 2000);
+  assert.equal(c.accounts[0].openProfit, 10);
+  assert.equal(c.accounts[1].openProfit, null);
   assert.equal(c.accounts[1].deposits, null);
   assert.equal(c.accounts[1].credit, null);
   assert.equal(c.accounts[1].demo, true);

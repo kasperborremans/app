@@ -506,3 +506,6 @@ input:disabled, select:disabled { opacity: .65; }
 
 label.check { flex-direction: row; align-items: flex-start; gap: 10px; color: var(--text); font-size: 14px; }
 label.check input { width: auto; margin-top: 3px; }
+
+.bonus-box { display: flex; flex-direction: column; gap: 6px; }
+.bonus-box #bonus-preview { margin: 0; line-height: 1.6; }

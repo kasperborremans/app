@@ -199,12 +199,14 @@ function bonusPctFor(a, meta, institution) {
 
 /**
  * Saldo en munt van een gekoppelde rekening: omgerekend als het een cent-account is,
- * en zonder bonus van de broker (dat is geen eigen geld).
+ * en zonder bonus/credit van de broker (dat is geen eigen geld).
  *
- * De bonus is een % van wat je gestort hebt, niet van je winst. Als de koppeling je
- * stortingen kent (Myfxbook), is de bonus dus bonus% × (stortingen − opnames) en blijft
- * je winst/verlies volledig meetellen. Zonder stortingen vallen we terug op
- * bedrag / (1 + bonus%), en zonder bonus% op de credit die de koppeling doorgeeft.
+ * In MetaTrader is equity = saldo + credit + open winst/verlies, en zit de credit nooit
+ * in het saldo. Volgorde, van exact naar geschat:
+ *  1. credit bekend (MetaApi)            → echt geld = equity − credit
+ *  2. saldo bekend (Myfxbook)            → echt geld = saldo + open winst/verlies
+ *  3. bonus% en stortingen bekend        → echt geld = equity − bonus% × netto stortingen
+ *  4. enkel bonus%                       → echt geld = equity ÷ (1 + bonus%)
  */
 function linkedAmount(a, meta, institution) {
   const cent = meta.cent ?? isCentAuto(a);
@@ -214,22 +216,33 @@ function linkedAmount(a, meta, institution) {
   const bonusPct = bonusPctFor(a, meta, institution);
   const deposits = a.deposits != null ? (Number(a.deposits) || 0) / div : null;
   const withdrawals = (Number(a.withdrawals) || 0) / div;
+  const cashBalance = a.cashBalance != null && !Number.isNaN(Number(a.cashBalance)) ? Number(a.cashBalance) / div : null;
+  const openProfit = a.openProfit != null ? Number(a.openProfit) / div : null;
   let bonus, method;
-  if (bonusPct > 0 && deposits > 0) {
+  if (a.credit != null) {
+    bonus = (Number(a.credit) || 0) / div;
+    method = 'credit';
+  } else if (cashBalance != null && a.balance != null) {
+    bonus = Math.max(0, gross - (cashBalance + (openProfit ?? 0)));
+    method = 'balance';
+  } else if (bonusPct > 0 && deposits > 0) {
     bonus = (bonusPct / 100) * Math.max(0, deposits - withdrawals);
     method = 'deposits';
   } else if (bonusPct > 0) {
     bonus = gross - gross / (1 + bonusPct / 100);
     method = 'ratio';
   } else {
-    bonus = (Number(a.credit) || 0) / div;
-    method = bonus ? 'credit' : null;
+    bonus = 0;
+    method = null;
   }
   return {
     balance: gross - bonus,
     gross,
     bonus,
-    bonusPct,
+    bonusPct: method === 'deposits' || method === 'ratio' ? bonusPct : 0,
+    exact: method === 'credit' || method === 'balance',
+    cashBalance,
+    openProfit,
     deposits,
     withdrawals,
     method,
@@ -832,7 +845,17 @@ function syncCreditHint() {
   form.balance.value = round2(amt.balance);
   const m = v => moneyIn(v, amt.currency);
   const lines = [];
-  if (amt.method === 'deposits') {
+  $('#bonus-pct-wrap').hidden = amt.exact;
+  if (amt.method === 'balance') {
+    lines.push(
+      `Saldo (zonder credit) ${m(amt.cashBalance)}`,
+      amt.openProfit == null ? 'Open winst/verlies: nog niet opgehaald (tik op ↻ Vernieuwen)' : `Open winst/verlies ${m(amt.openProfit)}`,
+      `Credit/bonus ${m(amt.bonus)} (telt niet mee)`,
+      `Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`,
+    );
+  } else if (amt.method === 'credit') {
+    lines.push(`Credit/bonus ${m(amt.bonus)} (telt niet mee)`, `Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`);
+  } else if (amt.method === 'deposits') {
     const net = amt.deposits - amt.withdrawals;
     lines.push(
       `Gestort ${m(amt.deposits)}` + (amt.withdrawals ? ` − opgenomen ${m(amt.withdrawals)}` : ''),
