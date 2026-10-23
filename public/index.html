@@ -132,6 +132,24 @@
               <p class="hint">Elke dag dat je het dashboard opent of de saldi worden opgehaald, wordt een momentopname bewaard.</p>
             </section>
 
+            <div class="duo">
+              <section class="card">
+                <div class="card-head">
+                  <h2>Maandoverzicht</h2>
+                  <div class="seg" id="month-seg" role="group" aria-label="Maand"></div>
+                </div>
+                <div id="month"></div>
+              </section>
+
+              <section class="card">
+                <div class="card-head">
+                  <h2>Spaardoelen</h2>
+                  <button class="btn small" id="btn-add-goal">+ Doel</button>
+                </div>
+                <div id="goals"></div>
+              </section>
+            </div>
+
             <section class="card">
               <div class="card-head">
                 <h2>Laatste transacties</h2>
@@ -378,6 +396,38 @@
         <button type="button" class="btn danger" id="btn-delete">Verwijderen</button>
         <span class="spacer"></span>
         <button type="button" class="btn" id="btn-cancel">Annuleren</button>
+        <button type="submit" class="btn primary">Opslaan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Spaardoel -->
+  <dialog id="goal-dialog">
+    <form id="goal-form" method="dialog">
+      <h2 id="goal-dialog-title">Spaardoel</h2>
+      <div class="form-grid">
+        <label class="span-2">Naam
+          <input name="name" required placeholder="bv. Buffer, Reis naar Japan, Eigen huis">
+        </label>
+        <label>Doelbedrag (€)
+          <input name="target" type="number" min="1" step="any" inputmode="decimal" required>
+        </label>
+        <label>Tegen (optioneel)
+          <input name="deadline" type="month">
+        </label>
+      </div>
+      <fieldset class="goal-accounts">
+        <legend>Welk geld telt mee?</legend>
+        <label class="check">
+          <input type="checkbox" name="all" checked>
+          <span>Mijn hele netto vermogen</span>
+        </label>
+        <div id="goal-account-list"></div>
+      </fieldset>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="btn-goal-delete">Verwijderen</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="btn-goal-cancel">Annuleren</button>
         <button type="submit" class="btn primary">Opslaan</button>
       </div>
     </form>

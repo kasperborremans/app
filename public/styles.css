@@ -655,3 +655,47 @@ a.btn { text-decoration: none; }
 }
 .bonus-box { display: flex; flex-direction: column; gap: 6px; }
 .bonus-box #bonus-preview { margin: 0; line-height: 1.6; }
+
+/* ---------- Maandoverzicht & spaardoelen ---------- */
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 20px; }
+.duo > .card { display: flex; flex-direction: column; }
+
+.month-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.month-stat { background: var(--surface-2); border-radius: var(--radius-sm); padding: 12px 14px; min-width: 0; }
+.month-stat .label { font-size: 12px; }
+.month-stat .val { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.month-rate { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 16px 0 6px; font-size: 14px; }
+.month-rate strong { font-size: 15px; }
+.month-sub { margin: 18px 0 4px; font-size: 13px; color: var(--text-2); font-weight: 600; }
+
+.progress { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.progress > div { height: 100%; border-radius: 999px; background: var(--accent); transition: width .3s; }
+.progress.good > div { background: var(--good); }
+.progress.bad > div { background: var(--bad); }
+
+.goal-list { display: flex; flex-direction: column; gap: 6px; }
+.goal {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 10px; border-radius: 12px;
+  cursor: pointer; transition: background .15s;
+}
+.goal + .goal { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.goal:hover, .goal:focus-visible { background: var(--surface-2); outline: none; }
+.goal-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.goal-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-head .pct { color: var(--text-2); font-size: 13px; font-weight: 600; }
+.goal-amounts { font-size: 13px; color: var(--text-2); }
+.goal .hint { margin: 0; }
+.goal .up { color: var(--good); }
+.goal .down { color: var(--bad); }
+
+.goal-accounts { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.goal-accounts legend { font-size: 13px; font-weight: 500; color: var(--text-2); padding: 0 4px; }
+#goal-account-list { display: flex; flex-direction: column; gap: 6px; padding-left: 4px; }
+#goal-account-list[hidden] { display: none; }
+
+@media (max-width: 560px) {
+  .duo { gap: 16px; }
+  .month-stats { gap: 6px; }
+  .month-stat { padding: 10px; }
+  .month-stat .val { font-size: 15px; }
+}

@@ -28,7 +28,7 @@ const DEFAULT_RATES = { EUR: 1, USD: 0.86, GBP: 1.15, CHF: 1.07 };
 /* ---------- State ---------- */
 
 function emptyState() {
-  return { version: 2, rates: { ...DEFAULT_RATES }, accounts: [], history: [], linkedMeta: {}, manualTx: [] };
+  return { version: 2, rates: { ...DEFAULT_RATES }, accounts: [], history: [], linkedMeta: {}, manualTx: [], goals: [] };
 }
 
 function normalizeState(s) {
@@ -69,6 +69,14 @@ function normalizeState(s) {
       currency: String(t.currency || 'EUR'),
       label: String(t.label || 'Saldo aangepast'),
       kind: 'manual',
+    })) : [],
+    // Spaardoelen: een bedrag tegen een datum, voor het hele vermogen of enkele rekeningen.
+    goals: Array.isArray(s.goals) ? s.goals.filter(g => g && Number(g.target) > 0).map(g => ({
+      id: String(g.id || uid()),
+      name: String(g.name || 'Spaardoel'),
+      target: Number(g.target),
+      deadline: /^\d{4}-\d{2}$/.test(g.deadline) ? g.deadline : '',
+      accountIds: Array.isArray(g.accountIds) ? g.accountIds.map(String) : [],
     })) : [],
   };
 }
@@ -342,6 +350,8 @@ const fmtDate = new Intl.DateTimeFormat('nl-BE', { day: 'numeric', month: 'short
 const fmtDateShort = new Intl.DateTimeFormat('nl-BE', { day: 'numeric', month: 'short' });
 const fmtMonth = new Intl.DateTimeFormat('nl-BE', { month: 'short', year: '2-digit' });
 const fmtTime = new Intl.DateTimeFormat('nl-BE', { hour: '2-digit', minute: '2-digit' });
+const fmtMonthName = new Intl.DateTimeFormat('nl-BE', { month: 'long' });
+const fmtMonthYear = new Intl.DateTimeFormat('nl-BE', { month: 'long', year: 'numeric' });
 
 function money(n, decimals = false) {
   return (decimals ? fmtEUR2 : fmtEUR).format(n);
@@ -460,6 +470,8 @@ function render() {
   renderAccounts(accounts);
   renderAllocation(t);
   renderAllTransactions(accounts);
+  renderMonth(accounts);
+  renderGoals();
   if (route === 'overzicht' && hasAccounts) renderNetChart();
   if (route === 'rekening') renderAccountPage(routeArg);
 }
@@ -847,6 +859,280 @@ function renderTxList(ul, txs, { showAccount = false, empty = 'Geen transacties.
     ul.append(li);
   }
 }
+
+/* ---------- Maandoverzicht ---------- */
+
+// Enkel geld op deze rekeningen telt als inkomen of uitgave; geld naar een broker is sparen.
+const CASH_TYPES = new Set(['bank', 'savings', 'cash']);
+// Zo ver gaan de transacties van de bank terug: oudere maanden zouden onvolledig zijn.
+const TX_WINDOW_DAYS = 90;
+const TRANSFER_DAYS = 4;
+
+const monthKey = iso => todayISO(new Date(iso)).slice(0, 7);
+const signedMoney = n => `${n >= 0 ? '+' : '−'}${money(Math.abs(n))}`;
+
+/**
+ * Overschrijvingen tussen eigen rekeningen (bv. zichtrekening → spaarrekening of → broker):
+ * een bedrag dat van de ene rekening vertrekt en binnen enkele dagen op een andere binnenkomt.
+ * Die tellen niet als inkomen of uitgave.
+ */
+function ownTransfers(txs) {
+  const found = new Set();
+  const flows = txs.filter(t => t.kind !== 'trade' && t.label !== 'Beginsaldo' && t.eur);
+  const ins = flows.filter(t => t.eur > 0);
+  for (const out of flows.filter(t => t.eur < 0)) {
+    const at = new Date(out.date).getTime();
+    // Wat speling voor de wisselkoers, bv. bij een storting naar een broker in dollar.
+    const tolerance = Math.max(1, Math.abs(out.eur) * 0.02);
+    let best = null, bestGap = Infinity;
+    for (const inc of ins) {
+      if (found.has(inc) || inc.account.id === out.account.id || Math.abs(inc.eur + out.eur) > tolerance) continue;
+      const gap = Math.abs(new Date(inc.date).getTime() - at);
+      if (gap <= TRANSFER_DAYS * 864e5 && gap < bestGap) { best = inc; bestGap = gap; }
+    }
+    if (best) { found.add(out); found.add(best); }
+  }
+  return found;
+}
+
+/** Inkomsten en uitgaven: betalingen op bank-, spaar- en cashrekeningen, zonder eigen overschrijvingen. */
+function cashFlows(accounts) {
+  const txs = allTransactions(accounts);
+  const transfers = ownTransfers(txs);
+  return txs.filter(t => CASH_TYPES.has(t.account.type) && t.kind !== 'trade' && t.label !== 'Beginsaldo' && t.eur && !transfers.has(t));
+}
+
+/** De huidige maand en de vorige maanden die nog volledig binnen de banktransacties vallen. */
+function monthOptions() {
+  const now = new Date();
+  const out = [];
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    if (i && (now - d) / 864e5 > TX_WINDOW_DAYS) break;
+    out.unshift(todayISO(d).slice(0, 7));
+  }
+  return out;
+}
+
+function inOut(txs) {
+  let income = 0, spent = 0;
+  for (const t of txs) {
+    if (t.eur > 0) income += t.eur; else spent -= t.eur;
+  }
+  return { income, spent, surplus: income - spent };
+}
+
+let monthSel = null;
+
+function renderMonth(accounts) {
+  const months = monthOptions();
+  if (!months.includes(monthSel)) monthSel = months[months.length - 1];
+  $('#month-seg').replaceChildren(...months.map(m => el('button', { type: 'button', class: m === monthSel ? 'active' : '', 'data-month': m },
+    fmtMonthName.format(parseDate(`${m}-01`)))));
+
+  const box = $('#month');
+  const flows = cashFlows(accounts);
+  if (!flows.length) {
+    box.replaceChildren(el('p', { class: 'hint' }, 'Nog geen betalingen of ontvangsten. Koppel je bankrekening om hier te zien wat er elke maand binnenkomt en buitengaat.'));
+    return;
+  }
+  const ofMonth = m => flows.filter(t => monthKey(t.date) === m);
+  const list = ofMonth(monthSel);
+  const cur = inOut(list);
+  const idx = months.indexOf(monthSel);
+  const prev = idx > 0 ? inOut(ofMonth(months[idx - 1])) : null;
+  const savingsRate = cur.income > 0 ? cur.surplus / cur.income : null;
+  const isCurrent = idx === months.length - 1;
+
+  const stat = (label, value, cls = '') => el('div', { class: 'month-stat' },
+    el('div', { class: 'label' }, label),
+    el('div', { class: `val money ${cls}` }, value));
+
+  const compare = prev && prev.spent > 0 && cur.spent > 0
+    ? (() => {
+        const pct = (cur.spent - prev.spent) / prev.spent;
+        const prevName = fmtMonthName.format(parseDate(`${months[idx - 1]}-01`));
+        return el('p', { class: 'hint' }, `Uitgaven ${fmtPct.format(Math.abs(pct))} ${pct <= 0 ? 'lager' : 'hoger'} dan in ${prevName}`
+          + (isCurrent ? ' (deze maand is nog bezig).' : '.'));
+      })()
+    : null;
+
+  const biggest = list.filter(t => t.eur < 0).sort((a, b) => a.eur - b.eur).slice(0, 5);
+  const ul = el('ul', { class: 'tx-list' });
+  renderTxList(ul, biggest, { showAccount: true, empty: 'Geen uitgaven deze maand.' });
+
+  box.replaceChildren(...[
+    el('div', { class: 'month-stats' },
+      stat('Inkomsten', money(cur.income), 'pos-val'),
+      stat('Uitgaven', money(cur.spent), 'neg-val'),
+      stat('Overschot', signedMoney(cur.surplus), cur.surplus >= 0 ? 'pos-val' : 'neg-val')),
+    el('div', { class: 'month-rate' },
+      el('span', {}, 'Spaarquote'),
+      el('strong', { class: savingsRate == null ? '' : savingsRate >= 0 ? 'pos-val' : 'neg-val' },
+        savingsRate == null ? '—' : `${savingsRate < 0 ? '−' : ''}${fmtPct.format(Math.abs(savingsRate))}`)),
+    el('div', { class: `progress ${savingsRate != null && savingsRate < 0 ? 'bad' : 'good'}`, role: 'img',
+      'aria-label': savingsRate == null ? 'Geen inkomsten deze maand' : `Spaarquote ${fmtPct.format(savingsRate)}` },
+      el('div', { style: `width:${Math.min(1, Math.abs(savingsRate ?? 0)) * 100}%` })),
+    el('p', { class: 'hint' }, savingsRate == null
+      ? 'Nog geen inkomsten deze maand.'
+      : 'Het deel van je inkomsten dat je overhoudt.' + (isCurrent ? ' Deze maand t.e.m. vandaag.' : '')),
+    compare,
+    el('div', { class: 'month-sub' }, 'Grootste uitgaven'),
+    ul,
+    el('p', { class: 'hint' }, 'Overschrijvingen tussen je eigen rekeningen (bv. naar je spaarrekening of broker) tellen niet mee.'),
+  ].filter(Boolean));
+}
+
+$('#month-seg').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  monthSel = b.dataset.month;
+  renderMonth(allAccounts());
+});
+
+/* ---------- Spaardoelen ---------- */
+
+// Het spaartempo meten we over de laatste 3 maanden.
+const PACE_DAYS = 90;
+const DAYS_PER_MONTH = 30.44;
+
+/** Doel zonder rekeningen = het hele netto vermogen. */
+function goalValue(g) {
+  if (!g.accountIds.length) return totals().net;
+  return allAccounts().filter(a => g.accountIds.includes(a.id)).reduce((s, a) => s + eurValue(a), 0);
+}
+
+/** Waarde van het doel in een momentopname, of null als die rekeningen er toen nog niet in stonden. */
+function goalValueAt(g, h) {
+  if (!g.accountIds.length) return h.net;
+  const ids = g.accountIds.filter(id => h.byAccount && id in h.byAccount);
+  return ids.length ? ids.reduce((s, id) => s + h.byAccount[id], 0) : null;
+}
+
+/** Gemiddelde groei per maand, of null zolang er minder dan 2 weken geschiedenis is. */
+function goalPace(g, now) {
+  const today = todayISO();
+  const cutoff = todayISO(new Date(Date.now() - PACE_DAYS * 864e5));
+  const past = state.history.filter(h => h.date < today && goalValueAt(g, h) != null);
+  const start = past.filter(h => h.date <= cutoff).pop() || past[0];
+  if (!start) return null;
+  const days = (parseDate(today) - parseDate(start.date)) / 864e5;
+  if (days < 14) return null;
+  return (now - goalValueAt(g, start)) / (days / DAYS_PER_MONTH);
+}
+
+function renderGoals() {
+  const box = $('#goals');
+  if (!state.goals.length) {
+    box.replaceChildren(
+      el('p', { class: 'hint' }, 'Spaar je voor iets, zoals een buffer, een reis of een eigen huis? Stel een doel in en zie hoeveel je per maand opzij moet zetten.'),
+      el('button', { type: 'button', class: 'btn small more', onclick: () => openGoalDialog() }, '+ Eerste doel instellen'));
+    return;
+  }
+  box.replaceChildren(el('div', { class: 'goal-list' }, state.goals.map(goalRow)));
+}
+
+function goalRow(g) {
+  const now = goalValue(g);
+  const left = g.target - now;
+  const share = Math.max(0, Math.min(1, now / g.target));
+  const pace = goalPace(g, now);
+  const m = v => el('span', { class: 'money' }, money(v));
+  let tone = '';
+  let status;
+
+  if (left <= 0) {
+    tone = 'good';
+    status = el('p', { class: 'hint up' }, '🎉 Doel bereikt!');
+  } else if (g.deadline) {
+    const [y, mo] = g.deadline.split('-').map(Number);
+    const end = new Date(y, mo, 1); // het doel loopt tot het einde van die maand
+    const deadlineName = fmtMonthYear.format(new Date(y, mo - 1, 1));
+    const monthsLeft = (end - Date.now()) / (DAYS_PER_MONTH * 864e5);
+    if (monthsLeft <= 0) {
+      tone = 'bad';
+      status = el('p', { class: 'hint down' }, `De deadline (${deadlineName}) is voorbij. Nog `, m(left), ' te gaan.');
+    } else {
+      const need = left / Math.max(1, monthsLeft);
+      const onTrack = pace != null && pace >= need;
+      if (pace != null) tone = onTrack ? 'good' : 'bad';
+      status = el('p', { class: 'hint' },
+        'Nog ', m(need), ` per maand nodig tot ${deadlineName}.`,
+        pace != null ? el('span', { class: onTrack ? 'up' : 'down' },
+          onTrack ? ' ✓ Op schema' : ' Achter op schema', ' (nu ', m(pace), '/maand).') : null);
+    }
+  } else if (pace > 0) {
+    const eta = new Date(Date.now() + (left / pace) * DAYS_PER_MONTH * 864e5);
+    status = el('p', { class: 'hint' }, 'Op dit tempo (', m(pace), `/maand) bereikt in ${fmtMonthYear.format(eta)}.`);
+  } else if (pace != null) {
+    status = el('p', { class: 'hint down' }, 'De laatste maanden is dit bedrag niet gegroeid.');
+  } else {
+    status = el('p', { class: 'hint' }, 'Na een paar weken zie je hier wanneer je het doel bereikt.');
+  }
+
+  const scope = g.accountIds.length
+    ? `${g.accountIds.length} ${g.accountIds.length === 1 ? 'rekening' : 'rekeningen'}`
+    : 'netto vermogen';
+  const open = () => openGoalDialog(g);
+  const row = el('div', { class: 'goal', tabindex: '0', role: 'button', 'aria-label': `${g.name} bewerken` },
+    el('div', { class: 'goal-head' }, el('strong', {}, g.name), el('span', { class: 'pct' }, fmtPct.format(share))),
+    el('div', { class: `progress ${tone}`, role: 'img', 'aria-label': `${fmtPct.format(share)} van het doel` },
+      el('div', { style: `width:${share * 100}%` })),
+    el('div', { class: 'goal-amounts' }, m(Math.max(0, now)), ' van ', m(g.target), ` · ${scope}`),
+    status);
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  return row;
+}
+
+const goalDlg = $('#goal-dialog');
+const goalForm = $('#goal-form');
+let editingGoal = null;
+
+function openGoalDialog(g = null) {
+  editingGoal = g;
+  $('#goal-dialog-title').textContent = g ? 'Spaardoel bewerken' : 'Nieuw spaardoel';
+  $('#btn-goal-delete').hidden = !g;
+  goalForm.name.value = g ? g.name : '';
+  goalForm.target.value = g ? g.target : '';
+  goalForm.deadline.value = g ? g.deadline : '';
+  goalForm.all.checked = !g?.accountIds.length;
+  const ids = new Set(g?.accountIds || []);
+  $('#goal-account-list').replaceChildren(...allAccounts().map(a => el('label', { class: 'check' },
+    el('input', { type: 'checkbox', value: a.id, checked: ids.has(a.id) ? '' : false }),
+    el('span', {}, a.name, el('span', { class: 'hint' }, ` · ${a.institution || TYPE[a.type].label}`)))));
+  syncGoalAccounts();
+  goalDlg.showModal();
+  if (!g) goalForm.name.focus();
+}
+
+function syncGoalAccounts() {
+  $('#goal-account-list').hidden = goalForm.all.checked;
+}
+
+goalForm.all.addEventListener('change', syncGoalAccounts);
+$('#btn-add-goal').addEventListener('click', () => openGoalDialog());
+$('#btn-goal-cancel').addEventListener('click', () => goalDlg.close());
+$('#btn-goal-delete').addEventListener('click', () => {
+  if (!editingGoal || !confirm(`Doel "${editingGoal.name}" verwijderen?`)) return;
+  state.goals = state.goals.filter(g => g.id !== editingGoal.id);
+  goalDlg.close();
+  save();
+});
+
+goalForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const target = Number(String(goalForm.target.value).replace(',', '.'));
+  if (!(target > 0)) return;
+  const accountIds = goalForm.all.checked ? []
+    : [...$('#goal-account-list').querySelectorAll('input:checked')].map(i => i.value);
+  if (!goalForm.all.checked && !accountIds.length) return toast('Kies minstens één rekening.', true);
+  const data = { name: goalForm.name.value.trim() || 'Spaardoel', target, deadline: goalForm.deadline.value, accountIds };
+  if (editingGoal) Object.assign(state.goals.find(g => g.id === editingGoal.id), data);
+  else state.goals.push({ id: uid(), ...data });
+  goalDlg.close();
+  save();
+});
 
 /* ---------- Rekeningen ---------- */
 
@@ -1538,6 +1824,19 @@ function loadDemo() {
   tx(zicht, 6, 2150, 'Loon oktober');
   tx(vt, 8, 250, 'Storting', 'USD');
   tx(zicht, 9, -850, 'Huur');
+  tx(zicht, 12, -64.8, 'Delhaize');
+  tx(rev, 15, -38.5, 'Restaurant');
+  tx(zicht, 36, 2150, 'Loon september');
+  tx(zicht, 39, -850, 'Huur');
+  tx(zicht, 41, -96.4, 'Colruyt');
+  tx(rev, 44, -12.99, 'Spotify');
+  tx(zicht, 47, -220, 'Energiefactuur');
+  const nextYear = new Date();
+  nextYear.setMonth(nextYear.getMonth() + 12);
+  state.goals = [
+    { id: uid(), name: 'Buffer', target: 15000, deadline: todayISO(nextYear).slice(0, 7), accountIds: [zicht.id, spaar.id] },
+    { id: uid(), name: '€ 50.000 vermogen', target: 50000, deadline: '', accountIds: [] },
+  ];
   save();
 }
 
