@@ -200,8 +200,11 @@ function bonusPctFor(a, meta, institution) {
 /**
  * Saldo en munt van een gekoppelde rekening: omgerekend als het een cent-account is,
  * en zonder bonus van de broker (dat is geen eigen geld).
- * Met een bonuspercentage tonen we bedrag / (1 + bonus%); anders trekken we de
- * credit af die de koppeling eventueel doorgeeft.
+ *
+ * De bonus is een % van wat je gestort hebt, niet van je winst. Als de koppeling je
+ * stortingen kent (Myfxbook), is de bonus dus bonus% × (stortingen − opnames) en blijft
+ * je winst/verlies volledig meetellen. Zonder stortingen vallen we terug op
+ * bedrag / (1 + bonus%), en zonder bonus% op de credit die de koppeling doorgeeft.
  */
 function linkedAmount(a, meta, institution) {
   const cent = meta.cent ?? isCentAuto(a);
@@ -209,11 +212,27 @@ function linkedAmount(a, meta, institution) {
   const cur = String(a.currency || 'EUR');
   const gross = (Number(a.balance) || 0) / div;
   const bonusPct = bonusPctFor(a, meta, institution);
-  const balance = bonusPct > 0 ? gross / (1 + bonusPct / 100) : gross - (Number(a.credit) || 0) / div;
+  const deposits = a.deposits != null ? (Number(a.deposits) || 0) / div : null;
+  const withdrawals = (Number(a.withdrawals) || 0) / div;
+  let bonus, method;
+  if (bonusPct > 0 && deposits > 0) {
+    bonus = (bonusPct / 100) * Math.max(0, deposits - withdrawals);
+    method = 'deposits';
+  } else if (bonusPct > 0) {
+    bonus = gross - gross / (1 + bonusPct / 100);
+    method = 'ratio';
+  } else {
+    bonus = (Number(a.credit) || 0) / div;
+    method = bonus ? 'credit' : null;
+  }
   return {
-    balance,
-    bonus: gross - balance,
+    balance: gross - bonus,
+    gross,
+    bonus,
     bonusPct,
+    deposits,
+    withdrawals,
+    method,
     currency: cent ? CENT_CURRENCIES[cur.toUpperCase()] || cur : cur,
     cent,
   };
@@ -811,9 +830,21 @@ function syncCreditHint() {
   const draft = { cent: form.cent.checked, bonusPct: Math.max(0, Number(String(form.bonusPct.value).replace(',', '.')) || 0) };
   const amt = linkedAmount(editing.raw, draft, editing.institution);
   form.balance.value = round2(amt.balance);
-  $('#bonus-preview').textContent = amt.bonus
-    ? `Broker toont ${moneyIn(amt.balance + amt.bonus, amt.currency)} → echt geld ${moneyIn(amt.balance, amt.currency)}`
-    : '';
+  const m = v => moneyIn(v, amt.currency);
+  const lines = [];
+  if (amt.method === 'deposits') {
+    const net = amt.deposits - amt.withdrawals;
+    lines.push(
+      `Gestort ${m(amt.deposits)}` + (amt.withdrawals ? ` − opgenomen ${m(amt.withdrawals)}` : ''),
+      `Bonus ${amt.bonusPct}% van ${m(net)} = ${m(amt.bonus)}`,
+      `Winst/verlies ${m(amt.balance - net)}`,
+      `Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`,
+    );
+  } else if (amt.bonus) {
+    lines.push(`Broker toont ${m(amt.gross)} → echt geld ${m(amt.balance)}`);
+    if (amt.method === 'ratio') lines.push('Stortingen onbekend: geschat als bedrag ÷ ' + (1 + amt.bonusPct / 100).toLocaleString('nl-BE'));
+  }
+  $('#bonus-preview').replaceChildren(...lines.flatMap((l, i) => (i ? [el('br'), l] : [l])));
 }
 
 form.cent.addEventListener('change', syncCreditHint);

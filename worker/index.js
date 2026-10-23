@@ -389,6 +389,9 @@ async function refreshMfx(env, conn) {
     balance: Number(a.equity ?? a.balance),
     cashBalance: Number(a.balance),
     credit: a.credit != null ? Number(a.credit) || 0 : null,
+    // Stortingen/opnames: nodig om de bonus (een % van de stortingen) te berekenen.
+    deposits: a.deposits != null ? Number(a.deposits) || 0 : null,
+    withdrawals: Number(a.withdrawals) || 0,
     currency: a.currency || 'USD',
     server: a.server?.name || null,
     demo: !!a.demo,
