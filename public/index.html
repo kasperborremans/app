@@ -39,40 +39,38 @@
         <span class="brand-name">Mijn Vermogen</span>
       </a>
       <nav class="nav" aria-label="Hoofdmenu">
-        <a href="#/" data-route="overzicht">
+        <a href="#/" data-route="overzicht" class="nav-home">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
           <span>Overzicht</span>
         </a>
-        <a href="#/rekeningen" data-route="rekeningen">
+        <a href="#/rekeningen" data-route="rekeningen" class="nav-accounts">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2.5"/><path d="M3 10.5h18M15.5 15h2.5"/><path d="M6 6V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>
           <span>Rekeningen</span>
         </a>
-        <a href="#/koppelingen" data-route="koppelingen">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>
-          <span>Koppelingen</span>
-          <span class="nav-badge" id="nav-conn-badge" hidden></span>
-        </a>
-        <a href="#/instellingen" data-route="instellingen">
+        <a href="#/instellingen" data-route="instellingen" class="nav-settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
           <span>Instellingen</span>
+          <span class="nav-badge" id="nav-conn-badge" hidden></span>
         </a>
       </nav>
       <div class="sidebar-foot">
         <p class="hint" id="sidebar-sync"></p>
-        <button class="btn ghost small" id="btn-logout-side">Afmelden</button>
       </div>
     </aside>
 
     <div class="content">
       <header class="topbar">
         <div class="topbar-title">
-          <span class="logo mobile-only" aria-hidden="true">€</span>
+          <a class="back" id="btn-back" href="#/" aria-label="Terug" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+          </a>
+          <span class="logo mobile-only" id="topbar-logo" aria-hidden="true">€</span>
           <h1 id="page-title">Overzicht</h1>
         </div>
         <div class="topbar-actions">
           <button class="btn ghost js-refresh" id="btn-refresh" title="Saldi nu ophalen">↻ <span class="lbl">Vernieuwen</span></button>
           <button class="btn ghost" id="btn-privacy" title="Bedragen verbergen/tonen" aria-pressed="false">👁 <span class="lbl">Verberg</span></button>
-          <button class="btn primary" id="btn-add">+ <span class="lbl">Rekening</span></button>
+          <button class="btn primary" id="btn-add" title="Rekening toevoegen of koppelen">+ <span class="lbl">Rekening</span></button>
         </div>
       </header>
 
@@ -95,7 +93,7 @@
                 <div class="label">Schulden</div>
                 <div class="mini-value money" id="debts-total">€ 0</div>
               </div>
-              <a class="mini mini-link" href="#/rekeningen">
+              <a class="mini" href="#/rekeningen">
                 <div class="label">Rekeningen</div>
                 <div class="mini-value" id="account-count">0</div>
               </a>
@@ -110,108 +108,124 @@
             <h2>Nog geen rekeningen</h2>
             <p>Koppel je bank of broker zodat je saldo automatisch wordt opgehaald, of voeg een rekening toe die je zelf bijhoudt.</p>
             <div class="row">
-              <a class="btn primary" href="#/koppelingen">🔗 Rekening koppelen</a>
+              <button class="btn primary js-link">🔗 Rekening koppelen</button>
               <button class="btn js-add-manual">+ Zelf toevoegen</button>
               <button class="btn" id="btn-demo">Demo-data laden</button>
             </div>
           </section>
 
           <div id="dashboard" class="stack">
-            <section class="tiles" id="tiles"></section>
-
-            <div class="grid-2">
-              <section class="card">
-                <div class="card-head">
-                  <h2>Verdeling bezittingen</h2>
-                </div>
-                <div class="stackbar" id="alloc-bar" role="img" aria-label="Verdeling van bezittingen per categorie"></div>
-                <ul class="legend-list" id="alloc-list"></ul>
-              </section>
-
-              <section class="card">
-                <div class="card-head">
-                  <h2>Per instelling</h2>
-                </div>
-                <ul class="bars" id="inst-bars"></ul>
-              </section>
-            </div>
-
             <section class="card">
               <div class="card-head">
                 <h2>Verloop netto vermogen</h2>
-                <div class="seg" id="range-seg" role="group" aria-label="Periode">
+                <div class="seg js-range" role="group" aria-label="Periode">
+                  <button data-range="30">1M</button>
                   <button data-range="90">3M</button>
                   <button data-range="365">1J</button>
                   <button data-range="all" class="active">Alles</button>
                 </div>
               </div>
               <div class="chart-wrap" id="history-wrap">
-                <svg id="history-chart" role="img" aria-label="Verloop van netto vermogen"></svg>
-                <div class="tooltip" id="tooltip" hidden></div>
+                <svg class="chart" id="history-chart" role="img" aria-label="Verloop van netto vermogen"></svg>
+                <div class="tooltip" hidden></div>
               </div>
-              <p class="hint" id="history-hint">Elke dag dat je het dashboard opent, wordt een momentopname bewaard.</p>
+              <p class="hint">Elke dag dat je het dashboard opent of de saldi worden opgehaald, wordt een momentopname bewaard.</p>
             </section>
 
             <section class="card">
               <div class="card-head">
-                <h2>Grootste rekeningen</h2>
-                <a class="btn small" href="#/rekeningen">Alle rekeningen ›</a>
+                <h2>Laatste transacties</h2>
+                <a class="btn small" href="#/rekeningen">Per rekening ›</a>
               </div>
-              <div id="top-accounts"></div>
+              <ul class="tx-list" id="tx-all"></ul>
+              <button class="btn small more" id="tx-more" hidden>Meer tonen</button>
             </section>
           </div>
         </div>
 
         <!-- ===== Rekeningen ===== -->
         <div class="page" data-page="rekeningen" hidden>
-          <section class="summary-strip" id="accounts-summary"></section>
+          <section class="card" id="alloc-card">
+            <div class="card-head">
+              <h2>Verdeling</h2>
+              <span class="label money" id="alloc-total"></span>
+            </div>
+            <div class="stackbar" id="alloc-bar" role="img" aria-label="Verdeling van bezittingen per categorie"></div>
+            <ul class="legend-list" id="alloc-list"></ul>
+          </section>
           <section class="card">
             <div class="card-head">
-              <h2>Alle rekeningen</h2>
+              <h2>Mijn rekeningen</h2>
               <div class="row wrap">
                 <select id="group-by" aria-label="Groeperen per">
                   <option value="type">Per categorie</option>
                   <option value="institution">Per instelling</option>
                 </select>
                 <button class="btn small js-add-manual">+ Zelf toevoegen</button>
-                <a class="btn small" href="#/koppelingen">🔗 Koppelen</a>
+                <button class="btn small js-link">🔗 Koppelen</button>
               </div>
             </div>
             <div id="accounts"></div>
           </section>
         </div>
 
-        <!-- ===== Gekoppelde accounts ===== -->
-        <div class="page" data-page="koppelingen" hidden>
+        <!-- ===== Eén rekening ===== -->
+        <div class="page" data-page="rekening" hidden>
+          <section class="card acc-hero" id="acc-hero"></section>
           <section class="card">
             <div class="card-head">
-              <div>
-                <h2>Gekoppelde accounts</h2>
-                <p class="hint">Saldi worden 4× per dag automatisch opgehaald. Alle koppelingen geven enkel leestoegang.</p>
+              <h2>Verloop van deze rekening</h2>
+              <div class="seg js-range" role="group" aria-label="Periode">
+                <button data-range="30">1M</button>
+                <button data-range="90">3M</button>
+                <button data-range="365">1J</button>
+                <button data-range="all" class="active">Alles</button>
               </div>
-              <button class="btn small js-refresh">↻ Nu vernieuwen</button>
             </div>
-            <div id="connections"></div>
+            <div class="chart-wrap" id="acc-chart-wrap">
+              <svg class="chart" id="acc-chart" role="img" aria-label="Verloop van deze rekening"></svg>
+              <div class="tooltip" hidden></div>
+            </div>
+            <p class="hint" id="acc-chart-hint"></p>
           </section>
-
-          <section class="card">
-            <div class="card-head">
-              <h2>Nieuwe koppeling</h2>
-            </div>
-            <div class="choice-list choice-grid" data-choices></div>
+          <section class="card" id="acc-holdings-card" hidden>
+            <div class="card-head"><h2>Posities</h2></div>
+            <ul class="tx-list" id="acc-holdings"></ul>
           </section>
-
           <section class="card">
-            <div class="card-head">
-              <h2>Diensten op de server</h2>
-            </div>
-            <ul class="provider-list" id="providers"></ul>
-            <p class="hint" id="config-status"></p>
+            <div class="card-head"><h2>Recentste transacties</h2></div>
+            <ul class="tx-list" id="acc-tx"></ul>
+            <p class="hint" id="acc-tx-hint"></p>
           </section>
         </div>
 
         <!-- ===== Instellingen ===== -->
         <div class="page" data-page="instellingen" hidden>
+          <section class="card settings-card">
+            <h2>Account</h2>
+            <div class="account-info">
+              <span class="logo big" aria-hidden="true">€</span>
+              <div>
+                <strong>Mijn Vermogen</strong>
+                <p class="hint" id="account-info"></p>
+              </div>
+            </div>
+            <a class="setting setting-link" href="#/koppelingen">
+              <div>
+                <strong>Gekoppelde accounts</strong>
+                <p class="hint" id="conn-summary"></p>
+              </div>
+              <span class="chev" aria-hidden="true">›</span>
+            </a>
+            <div class="setting">
+              <div>
+                <strong>Afmelden</strong>
+                <p class="hint">Je blijft anders 30 dagen aangemeld op dit toestel.</p>
+              </div>
+              <button type="button" class="btn" id="btn-logout">Afmelden</button>
+            </div>
+          </section>
+
           <section class="card settings-card">
             <h2>Weergave</h2>
             <div class="setting">
@@ -225,7 +239,7 @@
                 <button data-theme-opt="dark">Donker</button>
               </div>
             </div>
-            <label class="setting check-setting">
+            <label class="setting">
               <div>
                 <strong>Bedragen verbergen</strong>
                 <p class="hint">Vervaagt alle bedragen, handig als iemand meekijkt.</p>
@@ -256,20 +270,9 @@
           </section>
 
           <section class="card settings-card">
-            <h2>Account</h2>
-            <div class="setting">
-              <div>
-                <strong>Afmelden</strong>
-                <p class="hint">Je blijft anders 30 dagen aangemeld op dit toestel.</p>
-              </div>
-              <button type="button" class="btn" id="btn-logout">Afmelden</button>
-            </div>
-            <div class="setting">
-              <div>
-                <strong>Juridisch</strong>
-                <p class="hint"><a href="privacy.html">Privacybeleid</a> · <a href="terms.html">Voorwaarden</a></p>
-              </div>
-            </div>
+            <h2>Over</h2>
+            <p class="hint">Gekoppelde saldi en transacties worden 4× per dag automatisch opgehaald, met enkel leestoegang. Tik op ↻ om meteen te vernieuwen.</p>
+            <p class="hint"><a href="privacy.html">Privacybeleid</a> · <a href="terms.html">Voorwaarden</a></p>
           </section>
 
           <section class="card settings-card danger-zone">
@@ -283,11 +286,36 @@
             </div>
           </section>
         </div>
-      </main>
 
-      <footer class="footer">
-        Gekoppelde saldi worden 4× per dag automatisch opgehaald. Tik op ↻ om meteen te vernieuwen.
-      </footer>
+        <!-- ===== Gekoppelde accounts (onder Instellingen) ===== -->
+        <div class="page" data-page="koppelingen" hidden>
+          <section class="card">
+            <div class="card-head">
+              <div>
+                <h2>Gekoppelde accounts</h2>
+                <p class="hint">Saldi en transacties worden 4× per dag automatisch opgehaald. Alle koppelingen geven enkel leestoegang.</p>
+              </div>
+              <button class="btn small js-refresh">↻ Nu vernieuwen</button>
+            </div>
+            <div id="connections"></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Nieuwe koppeling</h2>
+            </div>
+            <div class="choice-list choice-grid" data-choices></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Diensten op de server</h2>
+            </div>
+            <ul class="provider-list" id="providers"></ul>
+            <p class="hint" id="config-status"></p>
+          </section>
+        </div>
+      </main>
     </div>
   </div>
 

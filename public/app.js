@@ -28,7 +28,7 @@ const DEFAULT_RATES = { EUR: 1, USD: 0.86, GBP: 1.15, CHF: 1.07 };
 /* ---------- State ---------- */
 
 function emptyState() {
-  return { version: 2, rates: { ...DEFAULT_RATES }, accounts: [], history: [], linkedMeta: {} };
+  return { version: 2, rates: { ...DEFAULT_RATES }, accounts: [], history: [], linkedMeta: {}, manualTx: [] };
 }
 
 function normalizeState(s) {
@@ -56,9 +56,20 @@ function normalizeState(s) {
     history: Array.isArray(s.history)
       ? s.history.filter(h => h && h.date).map(h => ({
           date: String(h.date), net: Number(h.net) || 0, byType: h.byType || {},
+          ...(h.byAccount && typeof h.byAccount === 'object' ? { byAccount: h.byAccount } : {}),
         })).sort((a, b) => a.date.localeCompare(b.date))
       : [],
     linkedMeta: s.linkedMeta && typeof s.linkedMeta === 'object' ? s.linkedMeta : {},
+    // Logboek van saldowijzigingen bij zelf bijgehouden rekeningen.
+    manualTx: Array.isArray(s.manualTx) ? s.manualTx.filter(t => t && t.accountId && t.date).map(t => ({
+      id: String(t.id || uid()),
+      accountId: String(t.accountId),
+      date: String(t.date),
+      amount: Number(t.amount) || 0,
+      currency: String(t.currency || 'EUR'),
+      label: String(t.label || 'Saldo aangepast'),
+      kind: 'manual',
+    })) : [],
   };
 }
 
@@ -262,8 +273,7 @@ function totals() {
   return { byType, assets, debts, net: assets + debts };
 }
 
-function todayISO() {
-  const d = new Date();
+function todayISO(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -272,7 +282,13 @@ function recordSnapshot() {
   if (!allAccounts().length) return false;
   const t = totals();
   const date = todayISO();
-  const snap = { date, net: round2(t.net), byType: Object.fromEntries(Object.entries(t.byType).map(([k, v]) => [k, round2(v)])) };
+  const snap = {
+    date,
+    net: round2(t.net),
+    byType: Object.fromEntries(Object.entries(t.byType).map(([k, v]) => [k, round2(v)])),
+    // Per rekening, voor de grafiek van elke rekening apart.
+    byAccount: Object.fromEntries(allAccounts().filter(a => !a.pending).map(a => [a.id, round2(eurValue(a))])),
+  };
   const last = state.history[state.history.length - 1];
   if (last && last.date === date) {
     if (JSON.stringify(last) === JSON.stringify(snap)) return false;
@@ -396,6 +412,7 @@ function render() {
 
   $('#empty-state').hidden = hasAccounts;
   $('#dashboard').hidden = !hasAccounts;
+  $('#alloc-card').hidden = !hasAccounts;
 
   $('#net-worth').textContent = money(t.net);
   $('#assets-total').textContent = money(t.assets);
@@ -407,15 +424,12 @@ function render() {
   renderConnections();
   renderProviders();
   renderRates();
-  renderAccountsSummary(t, accounts);
+  renderAccountInfo(accounts);
   renderAccounts(accounts);
-
-  if (!hasAccounts) return;
-  renderTiles(t, accounts);
   renderAllocation(t);
-  renderInstitutions(accounts);
-  if (route === 'overzicht') renderHistory();
-  renderTopAccounts(accounts);
+  renderAllTransactions(accounts);
+  if (route === 'overzicht' && hasAccounts) renderNetChart();
+  if (route === 'rekening') renderAccountPage(routeArg);
 }
 
 function renderDelta(net, count) {
@@ -427,14 +441,22 @@ function renderDelta(net, count) {
     box.textContent = count ? 'Eerste momentopname van vandaag.' : '';
     return;
   }
-  const diff = net - prev.net;
-  const pct = prev.net !== 0 ? diff / Math.abs(prev.net) : 0;
+  box.append(deltaChip(net - prev.net, prev.net), ` sinds ${fmtDate.format(parseDate(prev.date))}`);
+}
+
+/** Procentuele wijziging, of null als dat niets zegt (vertrek vanaf ±0, bv. vóór de eerste storting). */
+function changePct(diff, base) {
+  if (!base || Math.abs(base) < 1) return null;
+  const pct = diff / Math.abs(base);
+  return Math.abs(pct) > 10 ? null : pct;
+}
+
+/** ▲ +€ 120 (+1,2%) — groen of rood. */
+function deltaChip(diff, base) {
+  const pct = changePct(diff, base);
   const sign = diff >= 0 ? '+' : '−';
-  box.append(
-    el('span', { class: (diff >= 0 ? 'up' : 'down') + ' money' },
-      `${diff >= 0 ? '▲' : '▼'} ${sign}${money(Math.abs(diff))} (${sign}${fmtPct.format(Math.abs(pct))})`),
-    ` sinds ${fmtDate.format(parseDate(prev.date))}`
-  );
+  return el('span', { class: (diff >= 0 ? 'up' : 'down') + ' money' },
+    `${diff >= 0 ? '▲' : '▼'} ${sign}${money(Math.abs(diff))}` + (pct != null ? ` (${sign}${fmtPct.format(Math.abs(pct))})` : ''));
 }
 
 function renderSyncStatus() {
@@ -475,20 +497,17 @@ function renderAlerts() {
   }
 }
 
-function renderTiles(t, accounts) {
-  const box = $('#tiles');
-  box.replaceChildren();
-  for (const type of TYPES) {
-    const accs = accounts.filter(a => a.type === type.id);
-    if (!accs.length) continue;
-    const v = t.byType[type.id] || 0;
-    box.append(el('div', { class: 'tile', style: `--c:${type.color}` },
-      el('div', { class: 'tile-head' }, el('span', { class: 'swatch' }), type.label),
-      el('div', { class: 'tile-value money' + (v < 0 ? ' neg-val' : '') }, money(v)),
-      el('div', { class: 'tile-sub' }, `${accs.length} ${accs.length === 1 ? 'rekening' : 'rekeningen'}`
-        + (v > 0 && t.assets > 0 ? ` · ${fmtPct.format(v / t.assets)}` : ''))
-    ));
-  }
+function renderAccountInfo(accounts) {
+  const linked = accounts.filter(a => a.linked).length;
+  $('#account-info').textContent = [
+    `${accounts.length} ${accounts.length === 1 ? 'rekening' : 'rekeningen'}`,
+    `${linked} automatisch gekoppeld`,
+    $('#sync-status').textContent || null,
+  ].filter(Boolean).join(' · ');
+  const n = remote.connections.length;
+  const problems = connectionProblems().length;
+  $('#conn-summary').textContent = (n ? `${n} ${n === 1 ? 'koppeling' : 'koppelingen'}` : 'Nog niets gekoppeld')
+    + (problems ? ` · ⚠️ ${problems} vraagt aandacht` : '') + ' — bank, broker, diensten';
 }
 
 function renderAllocation(t) {
@@ -496,6 +515,7 @@ function renderAllocation(t) {
   const list = $('#alloc-list');
   bar.replaceChildren();
   list.replaceChildren();
+  $('#alloc-total').textContent = money(t.assets);
   const rows = TYPES.map(type => ({ type, v: t.byType[type.id] || 0 })).filter(r => r.v > 0);
   if (!rows.length || t.assets <= 0) {
     list.append(el('li', {}, el('span'), el('span', { class: 'label' }, 'Nog geen bezittingen.')));
@@ -519,50 +539,50 @@ function renderAllocation(t) {
   }
 }
 
-function renderInstitutions(accounts) {
-  const box = $('#inst-bars');
-  box.replaceChildren();
-  const map = new Map();
-  for (const a of accounts) {
-    const k = a.institution || '—';
-    map.set(k, (map.get(k) || 0) + eurValue(a));
-  }
-  const rows = [...map.entries()].sort((a, b) => b[1] - a[1]);
-  const max = Math.max(...rows.map(r => Math.abs(r[1])), 1);
-  for (const [name, v] of rows) {
-    const fill = el('div', { class: 'fill' + (v < 0 ? ' neg' : ''), style: `width:${(Math.abs(v) / max) * 100}%` });
-    box.append(el('li', {},
-      el('span', { class: 'name', title: name }, name),
-      el('div', { class: 'track' }, fill),
-      el('span', { class: 'money' + (v < 0 ? ' neg-val' : '') }, money(v))
-    ));
-  }
+/* ---------- Grafieken ---------- */
+
+let chartRange = 'all';
+
+function inRange(points) {
+  if (chartRange === 'all') return points;
+  const cutoff = Date.now() - Number(chartRange) * 864e5;
+  const inside = points.filter(p => p.t >= cutoff);
+  // Vertrek vanaf de laatste waarde vóór de periode, zodat de lijn niet halverwege begint.
+  const before = points.filter(p => p.t < cutoff).pop();
+  return before && inside.length ? [{ t: cutoff, v: before.v }, ...inside] : inside;
 }
 
-/* ---------- History chart ---------- */
+function netSeries() {
+  return state.history.map(h => ({ t: parseDate(h.date).getTime(), v: h.net }));
+}
 
-let historyRange = 'all';
+function renderNetChart() {
+  drawChart($('#history-chart'), inRange(netSeries()), n => n
+    ? 'Eén momentopname. Kom later terug om het verloop te zien.'
+    : 'Nog geen gegevens in deze periode.');
+}
 
-function renderHistory() {
-  const chart = $('#history-chart');
-  const wrap = $('#history-wrap');
+function rerenderCharts() {
+  if (route === 'overzicht' && allAccounts().length) renderNetChart();
+  if (route === 'rekening') renderAccountPage(routeArg);
+}
+
+/**
+ * Lijngrafiek met verloop en tooltip.
+ * points: [{ t: tijdstip in ms, v: waarde in euro }], chronologisch.
+ */
+function drawChart(chart, data, emptyMsg) {
+  const wrap = chart.parentElement;
+  const tip = wrap.querySelector('.tooltip');
   chart.replaceChildren();
+  tip.hidden = true;
   const W = wrap.clientWidth || 600;
   const H = wrap.clientHeight || 260;
   chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
-  let data = state.history;
-  if (historyRange !== 'all') {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - Number(historyRange));
-    data = data.filter(d => parseDate(d.date) >= cutoff);
-  }
-
   if (data.length < 2) {
     const msg = svg('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', class: 'empty-msg' });
-    msg.textContent = data.length
-      ? `Eén momentopname: ${money(data[0].net)}. Kom later terug om het verloop te zien.`
-      : 'Nog geen gegevens in deze periode.';
+    msg.textContent = emptyMsg(data.length);
     chart.append(msg);
     return;
   }
@@ -570,9 +590,10 @@ function renderHistory() {
   const m = { top: 12, right: 12, bottom: 26, left: 56 };
   const iw = W - m.left - m.right;
   const ih = H - m.top - m.bottom;
-  const xs = data.map(d => parseDate(d.date).getTime());
-  const ys = data.map(d => d.net);
-  const x0 = xs[0], x1 = xs[xs.length - 1];
+  const xs = data.map(d => d.t);
+  const ys = data.map(d => d.v);
+  const x0 = xs[0];
+  const x1 = Math.max(xs[xs.length - 1], x0 + 1);
   let y0 = Math.min(...ys), y1 = Math.max(...ys);
   if (y0 === y1) { y0 -= 1; y1 += 1; }
   const pad = (y1 - y0) * 0.1;
@@ -606,15 +627,16 @@ function renderHistory() {
   }
   chart.append(grid, axis);
 
-  const pts = data.map((d, i) => [sx(xs[i]), sy(d.net)]);
+  const pts = data.map((d, i) => [sx(xs[i]), sy(d.v)]);
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
   const base = sy(Math.max(y0, 0));
-  const grad = svg('linearGradient', { id: 'area-grad', x1: 0, y1: 0, x2: 0, y2: 1 });
+  const gradId = `grad-${chart.id}`;
+  const grad = svg('linearGradient', { id: gradId, x1: 0, y1: 0, x2: 0, y2: 1 });
   grad.append(svg('stop', { offset: 0, class: 'grad-top' }), svg('stop', { offset: 1, class: 'grad-bottom' }));
   const defs = svg('defs');
   defs.append(grad);
   chart.append(defs);
-  chart.append(svg('path', { class: 'area', fill: 'url(#area-grad)', d: `${line}L${pts[pts.length - 1][0]},${base}L${pts[0][0]},${base}Z` }));
+  chart.append(svg('path', { class: 'area', fill: `url(#${gradId})`, d: `${line}L${pts[pts.length - 1][0]},${base}L${pts[0][0]},${base}Z` }));
   chart.append(svg('path', { class: 'line', d: line }));
 
   const cross = svg('line', { class: 'cross', y1: m.top, y2: m.top + ih, visibility: 'hidden' });
@@ -622,7 +644,6 @@ function renderHistory() {
   const hit = svg('rect', { x: m.left, y: 0, width: iw, height: H, fill: 'transparent', tabindex: '0' });
   chart.append(cross, dot, hit);
 
-  const tip = $('#tooltip');
   let focusIdx = data.length - 1;
 
   const show = i => {
@@ -634,9 +655,9 @@ function renderHistory() {
     dot.setAttribute('visibility', 'visible');
     const d = data[i];
     const prev = data[i - 1];
-    const rows = [{ value: money(d.net), label: fmtDate.format(parseDate(d.date)), color: 'var(--cat-1)' }];
+    const rows = [{ value: money(d.v), label: fmtDate.format(new Date(d.t)), color: 'var(--accent)' }];
     if (prev) {
-      const diff = d.net - prev.net;
+      const diff = d.v - prev.v;
       rows.push({ value: `${diff >= 0 ? '+' : '−'}${money(Math.abs(diff))}`, label: 't.o.v. vorige' });
     }
     fillTooltip(tip, rows);
@@ -713,7 +734,115 @@ function attachTooltip(node, rowsFn) {
   node.addEventListener('blur', () => { floatTip.hidden = true; });
 }
 
-/* ---------- Accounts list ---------- */
+/* ---------- Transacties ---------- */
+
+/**
+ * Transacties van één rekening, nieuwste eerst. Gekoppelde rekeningen krijgen ze van
+ * de bank/broker; bij zelf bijgehouden rekeningen is het het logboek van saldowijzigingen.
+ */
+function accountTransactions(a) {
+  const list = a.linked
+    ? (a.raw.transactions || []).map(t => ({
+        ...t,
+        // Cent-accounts: bedragen in centen, net als het saldo.
+        amount: a.cent ? t.amount / 100 : t.amount,
+        currency: a.cent ? a.currency : t.currency || a.currency,
+      }))
+    : state.manualTx.filter(t => t.accountId === a.id).map(t => ({ ...t, currency: t.currency || a.currency }));
+  return list
+    .map(t => ({ ...t, account: a, eur: t.amount * rate(t.currency) }))
+    .sort((x, y) => String(y.date).localeCompare(String(x.date)));
+}
+
+function allTransactions(accounts) {
+  return accounts.flatMap(accountTransactions).sort((x, y) => String(y.date).localeCompare(String(x.date)));
+}
+
+let txShown = 15;
+
+function renderAllTransactions(accounts) {
+  const txs = allTransactions(accounts);
+  renderTxList($('#tx-all'), txs.slice(0, txShown), { showAccount: true,
+    empty: 'Nog geen transacties. Gekoppelde rekeningen tonen hier stortingen, betalingen en trades; bij zelf bijgehouden rekeningen zie je hier elke saldowijziging.' });
+  $('#tx-more').hidden = txs.length <= txShown;
+}
+
+const TX_ICON = { in: '↓', deposit: '↓', out: '↑', withdrawal: '↑', trade: '⇅', manual: '✎' };
+
+function txWhen(t) {
+  const d = new Date(t.date);
+  const days = Math.round((parseDate(todayISO()) - parseDate(todayISO(d))) / 864e5);
+  const day = days === 0 ? 'vandaag' : days === 1 ? 'gisteren' : fmtDate.format(d);
+  // Bankboekingen hebben enkel een datum; trades en eigen wijzigingen ook een uur.
+  return t.kind === 'in' || t.kind === 'out' ? day : `${day} ${fmtTime.format(d)}`;
+}
+
+function signedIn(n, cur) {
+  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${moneyIn(Math.abs(n), cur)}`;
+}
+
+function renderTxList(ul, txs, { showAccount = false, empty = 'Geen transacties.' } = {}) {
+  ul.replaceChildren();
+  if (!txs.length) {
+    ul.append(el('li', { class: 'tx-empty hint' }, empty));
+    return;
+  }
+  for (const t of txs) {
+    const up = t.amount >= 0;
+    const sub = [
+      showAccount ? `${t.account.name} · ${t.account.institution}` : null,
+      txWhen(t),
+      t.detail || null,
+    ].filter(Boolean).join(' · ');
+    const li = el('li', { class: 'tx' + (showAccount ? ' clickable' : '') },
+      el('span', { class: `tx-ico ${t.kind === 'trade' || t.kind === 'manual' ? t.kind : up ? 'in' : 'out'}`, 'aria-hidden': 'true' }, TX_ICON[t.kind] || (up ? '↓' : '↑')),
+      el('div', { class: 'tx-main' },
+        el('div', { class: 'tx-label' }, t.label, t.pending ? el('span', { class: 'pill muted' }, 'in behandeling') : null),
+        el('div', { class: 'tx-sub' }, sub)
+      ),
+      el('div', { class: 'tx-amt' },
+        el('div', { class: 'money ' + (up ? 'pos-val' : 'neg-val') }, signedIn(t.amount, t.currency)),
+        t.currency !== 'EUR' ? el('div', { class: 'acc-orig money' }, `≈ ${signedIn(t.eur, 'EUR')}`) : null
+      )
+    );
+    if (showAccount) {
+      li.tabIndex = 0;
+      li.setAttribute('role', 'link');
+      const go = () => navigate(`rekening/${encodeURIComponent(t.account.id)}`);
+      li.addEventListener('click', go);
+      li.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    }
+    ul.append(li);
+  }
+}
+
+/* ---------- Rekeningen ---------- */
+
+/**
+ * Verloop van één rekening in euro. Uit de dagelijkse momentopnames; zolang die er nog
+ * niet zijn, geschat door vanaf het huidige saldo terug te rekenen met de transacties.
+ */
+function accountSeries(a) {
+  const cur = round2(eurValue(a));
+  const today = parseDate(todayISO()).getTime();
+  const points = state.history
+    .filter(h => h.byAccount && a.id in h.byAccount)
+    .map(h => ({ t: parseDate(h.date).getTime(), v: h.byAccount[a.id] }));
+  if (points.length && points[points.length - 1].t === today) points[points.length - 1].v = cur;
+  else points.push({ t: today, v: cur });
+  if (points.length >= 2 || a.pending) return { points, estimated: false };
+
+  const txs = accountTransactions(a);
+  if (!txs.length) return { points, estimated: false };
+  const out = [{ t: Date.now(), v: cur }];
+  let v = cur;
+  for (const tx of txs) {
+    out.push({ t: new Date(tx.date).getTime(), v: round2(v) });
+    v -= tx.eur;
+  }
+  out.push({ t: new Date(txs[txs.length - 1].date).getTime() - 864e5, v: round2(v) });
+  return { points: out.sort((x, y) => x.t - y.t), estimated: true };
+}
 
 function renderAccounts(accounts) {
   const box = $('#accounts');
@@ -752,51 +881,111 @@ function renderAccounts(accounts) {
   }
 }
 
-function renderTopAccounts(accounts) {
-  const top = [...accounts].sort((x, y) => Math.abs(eurValue(y)) - Math.abs(eurValue(x))).slice(0, 5);
-  $('#top-accounts').replaceChildren(...top.map(a => accountRow(a)));
-}
-
-function renderAccountsSummary(t, accounts) {
-  const linked = accounts.filter(a => a.linked).length;
-  const insts = new Set(accounts.map(a => a.institution).filter(Boolean)).size;
-  const stat = (label, value, isMoney) => el('div', { class: 'stat' },
-    el('div', { class: 'label' }, label),
-    el('div', { class: 'stat-value' + (isMoney ? ' money' : '') }, value));
-  $('#accounts-summary').replaceChildren(
-    stat('Netto vermogen', money(t.net), true),
-    stat('Rekeningen', accounts.length),
-    stat('Automatisch gekoppeld', linked),
-    stat('Banken & brokers', insts),
-  );
+function accIcon(a) {
+  return el('span', { class: 'acc-ico', style: `--c:${TYPE[a.type].color}`, 'aria-hidden': 'true' },
+    (a.institution || a.name || '?').trim().charAt(0).toUpperCase());
 }
 
 /** mode 'type': toon de instelling als ondertitel; 'institution': toon de categorie. */
 function accountRow(a, mode = 'type') {
   const v = eurValue(a);
+  const { points } = accountSeries(a);
+  const change = points.length >= 2 ? v - points[0].v : null;
   const sub = [
     mode === 'type' ? a.institution : TYPE[a.type].label,
     a.holdings.length ? `${a.holdings.length} ${a.holdings.length === 1 ? 'positie' : 'posities'}` : null,
-    a.bonus ? `excl. ${moneyIn(a.bonus, a.currency)} bonus${a.bonusPct ? ` (${a.bonusPct}%)` : ''}` : null,
     a.linked ? `🔗 ${when(a.updatedAt)}` : `bijgewerkt ${fmtDate.format(new Date(a.updatedAt))}`,
-    a.note || null,
   ].filter(Boolean).join(' · ');
-  const row = el('div', { class: 'acc', tabindex: '0', role: 'button', 'aria-label': `${a.name} bewerken` },
-    el('span', { class: 'acc-ico', style: `--c:${TYPE[a.type].color}`, 'aria-hidden': 'true' },
-      (a.institution || a.name || '?').trim().charAt(0).toUpperCase()),
+  const open = () => navigate(`rekening/${encodeURIComponent(a.id)}`);
+  const row = el('div', { class: 'acc', tabindex: '0', role: 'link', 'aria-label': `${a.name} openen` },
+    accIcon(a),
     el('div', { class: 'acc-main' },
       el('div', { class: 'acc-name' }, a.name, a.error ? el('span', { class: 'badge warn', title: a.error }, '⚠️') : null),
       el('div', { class: 'acc-sub' }, sub)
     ),
     el('div', {},
       el('div', { class: 'acc-value money' + (v < 0 ? ' neg-val' : '') }, a.pending ? '…' : money(v, true)),
-      a.currency !== 'EUR' && !a.holdings.length ? el('div', { class: 'acc-orig money' }, moneyIn(a.balance, a.currency)) : null
+      change != null && Math.abs(change) >= 0.005
+        ? el('div', { class: 'acc-orig money ' + (change >= 0 ? 'pos-val' : 'neg-val') },
+            `${change >= 0 ? '▲' : '▼'} ${(pct => pct != null ? fmtPct.format(Math.abs(pct)) : money(Math.abs(change)))(changePct(change, points[0].v))}`)
+        : a.currency !== 'EUR' && !a.holdings.length ? el('div', { class: 'acc-orig money' }, moneyIn(a.balance, a.currency)) : null
     ),
-    el('span', { class: 'acc-edit' }, 'Bewerk ›')
+    el('span', { class: 'chev', 'aria-hidden': 'true' }, '›')
   );
-  row.addEventListener('click', () => openAccountDialog(a));
-  row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAccountDialog(a); } });
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
   return row;
+}
+
+function renderAccountPage(id) {
+  const a = allAccounts().find(x => x.id === id);
+  const hero = $('#acc-hero');
+  if (!a) {
+    $('#page-title').textContent = 'Rekening';
+    hero.replaceChildren(el('p', { class: 'hint' }, 'Deze rekening bestaat niet (meer).'), el('a', { class: 'btn small', href: '#/rekeningen' }, '‹ Naar rekeningen'));
+    for (const id2 of ['#acc-chart', '#acc-tx', '#acc-holdings']) $(id2).replaceChildren();
+    $('#acc-chart-hint').textContent = '';
+    $('#acc-tx-hint').textContent = '';
+    $('#acc-holdings-card').hidden = true;
+    return;
+  }
+  $('#page-title').textContent = a.name;
+  document.title = `${a.name} – Mijn Vermogen`;
+
+  const v = eurValue(a);
+  const { points, estimated } = accountSeries(a);
+  const first = points[0];
+  const txs = accountTransactions(a);
+  // Bij brokers: de winst of het verlies uit trades, los van stortingen en opnames.
+  const trades = txs.filter(t => t.kind === 'trade');
+  const tradeResult = trades.reduce((sum, t) => sum + t.eur, 0);
+  hero.replaceChildren(...[
+    el('div', { class: 'acc-hero-head' },
+      accIcon(a),
+      el('div', { class: 'acc-main' },
+        el('div', { class: 'acc-name' }, a.name),
+        el('div', { class: 'acc-sub' }, [a.institution, TYPE[a.type].label].filter(Boolean).join(' · '))
+      ),
+      el('button', { type: 'button', class: 'btn small', onclick: () => openAccountDialog(a) }, a.linked ? 'Instellingen' : 'Bewerken')
+    ),
+    el('div', { class: 'acc-hero-value money' + (v < 0 ? ' neg-val' : '') }, a.pending ? '…' : money(v, true)),
+    a.currency !== 'EUR' && !a.holdings.length ? el('div', { class: 'hint money' }, moneyIn(a.balance, a.currency)) : null,
+    points.length >= 2
+      ? el('div', { class: 'hero-delta' }, deltaChip(v - first.v, first.v), ` sinds ${fmtDate.format(new Date(first.t))}`)
+      : null,
+    trades.length
+      ? el('div', { class: 'hero-delta' }, deltaChip(tradeResult, 0), ` resultaat uit ${trades.length} ${trades.length === 1 ? 'trade' : 'trades'}`)
+      : null,
+    el('p', { class: 'hint' },
+      a.linked ? `🔗 Automatisch gekoppeld · opgehaald ${when(a.updatedAt)}` : `✍️ Zelf bijgehouden · bijgewerkt ${fmtDate.format(new Date(a.updatedAt))}`,
+      a.bonus ? ` · excl. ${moneyIn(a.bonus, a.currency)} bonus van de broker` : '',
+      a.note ? ` · ${a.note}` : ''),
+    a.error ? el('p', { class: 'form-error' }, a.error) : null,
+  ].filter(Boolean));
+
+  drawChart($('#acc-chart'), inRange(points), () => 'Nog te weinig gegevens. Het verloop wordt vanaf nu elke dag bewaard.');
+  $('#acc-chart-hint').textContent = estimated
+    ? 'Geschat door terug te rekenen met de transacties. Vanaf nu wordt het echte verloop elke dag bewaard.'
+    : points.length >= 2 ? 'Op basis van de dagelijkse momentopnames.' : '';
+
+  $('#acc-holdings-card').hidden = !a.holdings.length;
+  $('#acc-holdings').replaceChildren(...a.holdings.map(h => {
+    const q = holdingQuote(h, a);
+    return el('li', { class: 'tx' },
+      el('span', { class: 'tx-ico trade', 'aria-hidden': 'true' }, (h.symbol || '?').charAt(0)),
+      el('div', { class: 'tx-main' },
+        el('div', { class: 'tx-label' }, h.symbol || 'Positie'),
+        el('div', { class: 'tx-sub money' }, `${h.qty.toLocaleString('nl-BE')} × ${moneyIn(q.price, q.currency)}${q.auto ? ' · automatische koers' : ''}`)),
+      el('div', { class: 'tx-amt' }, el('div', { class: 'money' }, money(h.qty * q.price * rate(q.currency), true)))
+    );
+  }));
+
+  renderTxList($('#acc-tx'), txs.slice(0, 50), {
+    empty: a.linked ? 'Nog geen transacties opgehaald.' : 'Nog geen wijzigingen. Pas je het saldo aan via Bewerken, dan verschijnt dat hier.',
+  });
+  $('#acc-tx-hint').textContent = a.linked
+    ? (a.raw.txError ? `Transacties ophalen lukte niet: ${a.raw.txError}` : 'De laatste 90 dagen, rechtstreeks van de bank of broker.')
+    : 'Logboek van je eigen saldowijzigingen.';
 }
 
 /* ---------- Account dialog ---------- */
@@ -921,10 +1110,19 @@ $('#btn-delete').addEventListener('click', () => {
   } else {
     if (!confirm(`"${editing.name}" verwijderen?`)) return;
     state.accounts = state.accounts.filter(x => x.id !== editing.id);
+    state.manualTx = state.manualTx.filter(t => t.accountId !== editing.id);
   }
   dlg.close();
+  if (route === 'rekening') navigate('rekeningen');
   save();
 });
+
+/** Elke saldowijziging van een zelf bijgehouden rekening komt in het transactielogboek. */
+function logManualTx(accountId, amount, currency, label) {
+  if (Math.abs(amount) < 0.005) return;
+  state.manualTx.push({ id: uid(), accountId, date: new Date().toISOString(), amount: round2(amount), currency, label, kind: 'manual' });
+  if (state.manualTx.length > 1000) state.manualTx = state.manualTx.slice(-1000);
+}
 
 form.addEventListener('submit', e => {
   e.preventDefault();
@@ -951,8 +1149,17 @@ form.addEventListener('submit', e => {
     note: form.note.value.trim(),
     updatedAt: new Date().toISOString(),
   };
-  if (editing) Object.assign(state.accounts.find(x => x.id === editing.id), data);
-  else state.accounts.push({ id: uid(), ...data });
+  if (editing) {
+    const acc = state.accounts.find(x => x.id === editing.id);
+    const diff = acc.currency === data.currency ? data.balance - acc.balance : 0;
+    const signed = TYPE[type].negative ? -diff : diff;
+    logManualTx(acc.id, signed, data.currency, signed > 0 ? 'Saldo verhoogd' : 'Saldo verlaagd');
+    Object.assign(acc, data);
+  } else {
+    const id = uid();
+    state.accounts.push({ id, ...data });
+    logManualTx(id, TYPE[type].negative ? -data.balance : data.balance, data.currency, 'Beginsaldo');
+  }
   dlg.close();
   save();
 });
@@ -1233,7 +1440,6 @@ async function logout() {
   showLogin();
 }
 $('#btn-logout').addEventListener('click', logout);
-$('#btn-logout-side').addEventListener('click', logout);
 
 /* ---------- Demo data ---------- */
 
@@ -1251,14 +1457,33 @@ function loadDemo() {
     acc('Portefeuille', 'Lightyear', 'broker', 120, { holdings: [h('VWCE.DE', 42, 138.5), h('IWDA.AS', 30, 104.2)] }),
     acc('MT5-account', 'VT Markets', 'broker', 2150, { currency: 'USD' }),
   ];
-  const t0 = totals().net;
-  for (let i = 12; i >= 1; i--) {
+  // Een jaar verloop per rekening, en wat voorbeeldtransacties.
+  const now0 = Object.fromEntries(state.accounts.map(a => [a.id, eurValue(a)]));
+  for (let i = 52; i >= 1; i--) {
     const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const factor = 1 - i * 0.022 + Math.sin(i * 1.7) * 0.015;
-    state.history.push({ date: iso, net: round2(t0 * factor), byType: {} });
+    d.setDate(d.getDate() - i * 7);
+    const byAccount = {};
+    state.accounts.forEach((a, k) => {
+      const trend = 1 - i * (0.002 + k * 0.0006);
+      byAccount[a.id] = round2(now0[a.id] * Math.max(0.2, trend + Math.sin(i * (0.9 + k * 0.4)) * 0.03));
+    });
+    const net = round2(Object.values(byAccount).reduce((x, y) => x + y, 0));
+    state.history.push({ date: todayISO(d), net, byType: {}, byAccount });
   }
+  const [zicht, spaar, rev, ly, vt] = state.accounts;
+  const tx = (acc, daysAgo, amount, label, cur = 'EUR') => state.manualTx.push({
+    id: uid(), accountId: acc.id, date: new Date(Date.now() - daysAgo * 864e5).toISOString(), amount, currency: cur, label, kind: 'manual',
+  });
+  tx(zicht, 0.2, -42.1, 'Colruyt');
+  tx(vt, 0.5, 64.3, 'Winst trade XAUUSD', 'USD');
+  tx(zicht, 1, 500, 'Storting van spaarrekening');
+  tx(spaar, 1, -500, 'Naar zichtrekening');
+  tx(vt, 2, -18.75, 'Verlies trade EURUSD', 'USD');
+  tx(rev, 3, -12.99, 'Spotify');
+  tx(ly, 4, 300, 'Storting');
+  tx(zicht, 6, 2150, 'Loon oktober');
+  tx(vt, 8, 250, 'Storting', 'USD');
+  tx(zicht, 9, -850, 'Huur');
   save();
 }
 
@@ -1267,16 +1492,21 @@ $('#btn-demo').addEventListener('click', loadDemo);
 /* ---------- Top bar ---------- */
 
 $('#btn-add').addEventListener('click', openLinkChooser);
+for (const b of document.querySelectorAll('.js-link')) b.addEventListener('click', openLinkChooser);
+$('#tx-more').addEventListener('click', () => { txShown += 30; renderAllTransactions(allAccounts()); });
 for (const b of document.querySelectorAll('.js-add-manual')) b.addEventListener('click', () => openAccountDialog());
 $('#group-by').addEventListener('change', () => renderAccounts(allAccounts()));
 
-$('#range-seg').addEventListener('click', e => {
-  const b = e.target.closest('button');
-  if (!b) return;
-  historyRange = b.dataset.range;
-  for (const x of $('#range-seg').querySelectorAll('button')) x.classList.toggle('active', x === b);
-  renderHistory();
-});
+// Eén gedeelde periode voor alle grafieken.
+for (const seg of document.querySelectorAll('.js-range')) {
+  seg.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    chartRange = b.dataset.range;
+    for (const x of document.querySelectorAll('.js-range button')) x.classList.toggle('active', x.dataset.range === chartRange);
+    rerenderCharts();
+  });
+}
 
 /** theme: 'light', 'dark' of null (volg het toestel). */
 function applyTheme(theme) {
@@ -1294,7 +1524,7 @@ $('#theme-seg').addEventListener('click', e => {
     if (opt === 'system') localStorage.removeItem(THEME_KEY);
     else localStorage.setItem(THEME_KEY, opt);
   } catch { /* */ }
-  if (route === 'overzicht' && allAccounts().length) renderHistory();
+  rerenderCharts();
 });
 
 function applyPrivacy(on) {
@@ -1319,14 +1549,21 @@ $('#btn-privacy').addEventListener('click', () => {
 const PAGES = {
   overzicht: 'Overzicht',
   rekeningen: 'Rekeningen',
-  koppelingen: 'Gekoppelde accounts',
+  rekening: 'Rekening',
   instellingen: 'Instellingen',
+  koppelingen: 'Gekoppelde accounts',
 };
+// Subpagina's: welk menu-item oplicht en waar de terugknop naartoe gaat.
+const PARENT = { rekening: 'rekeningen', koppelingen: 'instellingen' };
 let route = 'overzicht';
+let routeArg = null;
 
-function routeFromHash() {
-  const r = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
-  return r in PAGES ? r : 'overzicht';
+function parseHash() {
+  const [r, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
+  if (!(r in PAGES)) return ['overzicht', null];
+  let arg = rest.join('/') || null;
+  try { arg = arg && decodeURIComponent(arg); } catch { /* */ }
+  return [r, arg];
 }
 
 function navigate(r) {
@@ -1334,18 +1571,23 @@ function navigate(r) {
 }
 
 function showRoute() {
-  const prev = route;
-  route = routeFromHash();
+  const prev = `${route}/${routeArg}`;
+  [route, routeArg] = parseHash();
   for (const p of document.querySelectorAll('.page')) p.hidden = p.dataset.page !== route;
+  const navRoute = PARENT[route] || route;
   for (const a of document.querySelectorAll('.nav a')) {
-    if (a.dataset.route === route) a.setAttribute('aria-current', 'page');
+    if (a.dataset.route === navRoute) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
+  const parent = PARENT[route];
+  $('#btn-back').hidden = !parent;
+  $('#btn-back').href = parent ? `#/${parent}` : '#/';
+  $('#topbar-logo').classList.toggle('gone', !!parent);
   $('#page-title').textContent = PAGES[route];
   document.title = route === 'overzicht' ? 'Mijn Vermogen' : `${PAGES[route]} – Mijn Vermogen`;
-  // De grafiek meet zijn breedte: pas tekenen als de pagina zichtbaar is.
-  if (route === 'overzicht' && allAccounts().length) renderHistory();
-  if (prev !== route) window.scrollTo(0, 0);
+  // Grafieken meten hun breedte: pas tekenen als de pagina zichtbaar is.
+  rerenderCharts();
+  if (prev !== `${route}/${routeArg}`) window.scrollTo(0, 0);
 }
 
 window.addEventListener('hashchange', showRoute);
@@ -1359,7 +1601,7 @@ try { applyPrivacy(localStorage.getItem(PRIVACY_KEY) === '1'); } catch { /* */ }
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (route === 'overzicht' && allAccounts().length) renderHistory(); }, 120);
+  resizeTimer = setTimeout(rerenderCharts, 120);
 });
 
 // Terug van de bank?

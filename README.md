@@ -7,10 +7,13 @@ Persoonlijk dashboard om al je geld in één oogopslag te zien — op je gsm én
 - **Lightyear** (en andere brokers zonder API): je vult je posities één keer in, de koersen worden automatisch opgehaald
 - Wisselkoersen automatisch van de ECB, alles omgerekend naar euro
 - Verloop van je vermogen over tijd, verdeling per categorie en per instelling
-- Aparte pagina's: **Overzicht**, **Rekeningen**, **Koppelingen** (gekoppelde accounts beheren) en **Instellingen** (thema, wisselkoersen, back-up, afmelden)
+- **Overzicht**: je vermogen, het verloop en de laatste transacties van al je rekeningen (betalingen, stortingen, winst/verlies van trades)
+- **Rekeningen**: elke rekening apart; tik erop voor een eigen grafiek, de stijging/daling en de recentste transacties
+- **Instellingen**: account, gekoppelde accounts, thema, wisselkoersen, back-up
+- Transacties komen automatisch van de bank (Enable Banking) en van MetaTrader (Myfxbook/MetaApi: stortingen, opnames, gesloten trades — de bonus telt niet mee). Bij zelf bijgehouden rekeningen wordt elke saldowijziging gelogd.
 - Beveiligd met een wachtwoord, te installeren als app op je gsm
 
-Saldi worden 4× per dag automatisch opgehaald (het maximum dat banken toelaten zonder dat je zelf inlogt). Met de ↻-knop vernieuw je meteen.
+Saldi en transacties worden 4× per dag automatisch opgehaald (het maximum dat banken toelaten zonder dat je zelf inlogt). Met de ↻-knop vernieuw je meteen.
 
 ## Installeren (eenmalig, ±20 minuten)
 
