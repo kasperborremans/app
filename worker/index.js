@@ -16,6 +16,9 @@ const metaClient = region => `https://mt-client-api-v1.${region}.agiliumtrade.ai
 const MFX_API = 'https://www.myfxbook.com/api';
 
 const COOKIE = 'mv_session';
+// Zoveel recente transacties per rekening bewaren we (en tonen we in de app).
+const MAX_TX = 60;
+const TX_DAYS = 90;
 const SESSION_DAYS = 30;
 const MAX_LOGIN_FAILS = 10;
 
@@ -276,7 +279,45 @@ async function refreshEB(env, conn, psu) {
     acc.balance = Number(pick.balance_amount.amount);
     acc.currency = pick.balance_amount.currency || acc.currency;
     acc.updatedAt = new Date().toISOString();
+    await keepTx(acc, () => ebTransactions(env, acc, psu));
   }
+}
+
+/** Haalt de transacties op; een fout hierbij mag het saldo niet tegenhouden. */
+async function keepTx(acc, load) {
+  try {
+    acc.transactions = (await load())
+      .filter(t => t.date && Number.isFinite(t.amount) && t.amount !== 0)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, MAX_TX);
+    delete acc.txError;
+  } catch (e) {
+    acc.txError = String(e.message || e).slice(0, 200);
+  }
+}
+
+const isoDaysAgo = days => new Date(Date.now() - days * 864e5).toISOString();
+
+async function ebTransactions(env, acc, psu) {
+  const from = isoDaysAgo(TX_DAYS).slice(0, 10);
+  const data = await ebFetch(env, `/accounts/${encodeURIComponent(acc.uid)}/transactions?date_from=${from}`, {}, psu);
+  return (data.transactions || []).map(t => {
+    const amount = Number(t.transaction_amount?.amount) || 0;
+    const credit = t.credit_debit_indicator === 'CRDT';
+    const party = credit ? t.debtor?.name : t.creditor?.name;
+    const info = Array.isArray(t.remittance_information) ? t.remittance_information.join(' ') : t.remittance_information;
+    const day = t.booking_date || t.value_date || t.transaction_date;
+    return {
+      id: String(t.entry_reference || t.transaction_id || `${day}:${amount}:${info || ''}`),
+      date: day ? new Date(`${day}T12:00:00Z`).toISOString() : null,
+      amount: credit ? Math.abs(amount) : -Math.abs(amount),
+      currency: t.transaction_amount?.currency || acc.currency,
+      label: String(party || info || (credit ? 'Ontvangen' : 'Betaling')).replace(/\s+/g, ' ').trim().slice(0, 120),
+      detail: party && info ? String(info).replace(/\s+/g, ' ').trim().slice(0, 160) : undefined,
+      kind: credit ? 'in' : 'out',
+      pending: t.status === 'PDNG' || undefined,
+    };
+  });
 }
 
 /* ---------- MetaApi (MetaTrader / VT Markets) ---------- */
@@ -329,6 +370,24 @@ async function refreshMeta(env, conn) {
   acc.server = info.server || acc.server || null;
   if (info.broker) conn.institution = info.broker;
   acc.updatedAt = new Date().toISOString();
+  await keepTx(acc, async () => {
+    const url = `${metaClient(conn.region)}/users/current/accounts/${conn.accountId}/history-deals/time/${isoDaysAgo(TX_DAYS)}/${new Date().toISOString()}`;
+    const deals = await metaFetch(env, url);
+    return (Array.isArray(deals) ? deals : []).map(metaDealTx).filter(Boolean);
+  });
+}
+
+/** Stortingen/opnames en het resultaat van gesloten trades; bonus (credit) en openingen tellen niet. */
+function metaDealTx(d) {
+  const amount = (Number(d.profit) || 0) + (Number(d.commission) || 0) + (Number(d.swap) || 0);
+  const date = d.time ? new Date(d.time).toISOString() : null;
+  if (d.type === 'DEAL_TYPE_BALANCE') {
+    return { id: String(d.id), date, amount, label: amount >= 0 ? 'Storting' : 'Opname', detail: d.comment || undefined, kind: amount >= 0 ? 'deposit' : 'withdrawal' };
+  }
+  if ((d.type === 'DEAL_TYPE_BUY' || d.type === 'DEAL_TYPE_SELL') && /OUT/.test(d.entryType || '')) {
+    return { id: String(d.id), date, amount, label: `${amount >= 0 ? 'Winst' : 'Verlies'} trade ${d.symbol || ''}`.trim(), detail: d.volume ? `${d.volume} lot` : undefined, kind: 'trade' };
+  }
+  return null;
 }
 
 /* ---------- Myfxbook (gratis alternatief voor MetaApi) ---------- */
@@ -397,6 +456,7 @@ async function mfxAdd(env, origin) {
 async function refreshMfx(env, conn) {
   const accounts = await mfxAccounts(env);
   conn.institution = mfxInstitution(accounts);
+  const previous = new Map((conn.accounts || []).map(a => [a.key, a]));
   // Open winst/verlies apart ophalen: equity = saldo + credit + open winst/verlies,
   // dus zonder dit getal is de credit (bonus) niet van de open winst te onderscheiden.
   const openProfit = await Promise.all(accounts.map(a => (a.demo ? null : mfxOpenProfit(env, a.id))));
@@ -416,7 +476,33 @@ async function refreshMfx(env, conn) {
     server: a.server?.name || null,
     demo: !!a.demo,
     updatedAt: a.lastUpdateDate ? parseMfxDate(a.lastUpdateDate) : new Date().toISOString(),
+    mfxId: a.id,
   }));
+  // De gratis API laat 100 verzoeken per dag toe: enkel echte accounts, demo's overslaan.
+  for (const acc of conn.accounts) {
+    const prev = previous.get(acc.key);
+    if (prev?.transactions) acc.transactions = prev.transactions;
+    if (acc.demo) continue;
+    await keepTx(acc, async () => {
+      const data = await mfxGet(env, 'get-history', { id: acc.mfxId });
+      return (data.history || []).map(h => mfxHistoryTx(h, acc.currency)).filter(Boolean);
+    });
+  }
+}
+
+function mfxHistoryTx(h, currency) {
+  const action = String(h.action || '');
+  const amount = (Number(h.profit) || 0) + (Number(h.interest) || 0) + (Number(h.commission) || 0);
+  const date = parseMfxDate(h.closeTime || h.openTime);
+  const id = `${h.openTime}|${h.closeTime}|${action}|${h.symbol || ''}|${h.profit}`;
+  if (/deposit|withdraw/i.test(action)) {
+    const isIn = amount >= 0;
+    return { id, date, amount, currency, label: isIn ? 'Storting' : 'Opname', detail: h.comment || undefined, kind: isIn ? 'deposit' : 'withdrawal' };
+  }
+  if (/^(buy|sell)$/i.test(action) && h.symbol) {
+    return { id, date, amount, currency, label: `${amount >= 0 ? 'Winst' : 'Verlies'} trade ${h.symbol}`, detail: h.sizing?.value ? `${action} ${h.sizing.value} lot` : action, kind: 'trade' };
+  }
+  return null; // bonus (credit) e.d. is geen eigen geld
 }
 
 /** Myfxbook geeft datums als "MM/dd/yyyy HH:mm". */

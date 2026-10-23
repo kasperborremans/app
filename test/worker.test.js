@@ -47,6 +47,16 @@ beforeEach(() => {
       { balance_type: 'ITAV', balance_amount: { amount: '999.00', currency: 'EUR' } },
       { balance_type: 'CLBD', balance_amount: { amount: '1234.56', currency: 'EUR' } },
     ] });
+    if (url.includes('/accounts/uid-1/transactions')) return ok({ transactions: [
+      { entry_reference: 't1', transaction_amount: { amount: '250.00', currency: 'EUR' }, credit_debit_indicator: 'CRDT', booking_date: '2026-10-15', debtor: { name: 'Werkgever NV' }, remittance_information: ['Loon oktober'], status: 'BOOK' },
+      { entry_reference: 't2', transaction_amount: { amount: '42.10', currency: 'EUR' }, credit_debit_indicator: 'DBIT', booking_date: '2026-10-16', creditor: { name: 'Colruyt' }, status: 'BOOK' },
+    ] });
+    if (url.includes('history-deals')) return ok([
+      { id: 'd1', type: 'DEAL_TYPE_BALANCE', profit: 500, time: '2026-10-01T10:00:00Z' },
+      { id: 'd2', type: 'DEAL_TYPE_BUY', entryType: 'DEAL_ENTRY_IN', symbol: 'XAUUSD', profit: 0, time: '2026-10-02T10:00:00Z' },
+      { id: 'd3', type: 'DEAL_TYPE_SELL', entryType: 'DEAL_ENTRY_OUT', symbol: 'XAUUSD', profit: 80, commission: -3, swap: -1, time: '2026-10-03T10:00:00Z' },
+      { id: 'd4', type: 'DEAL_TYPE_CREDIT', profit: 100, time: '2026-10-01T10:00:00Z' },
+    ]);
     if (url.startsWith('https://api.enablebanking.com/aspsps')) return ok({ aspsps: [{ name: 'Argenta', country: 'BE', logo: 'x.png' }] });
     if (url.includes('mt-provisioning-api')) return ok({ name: 'VT live', login: 123, server: 'VTMarkets-Live', region: 'london' });
     if (url.includes('mt-client-api-v1.london')) return ok({ broker: 'VT Markets', currency: 'USD', balance: 2000, equity: 2100.5, credit: 400 });
@@ -132,6 +142,8 @@ test('Enable Banking: koppelen, callback, saldo en cron', async () => {
   const acc = snap.connections[0].accounts[0];
   assert.equal(acc.balance, 1234.56, 'CLBD heeft voorrang op ITAV');
   assert.equal(acc.key, 'eb:BE68539007547034');
+  assert.deepEqual(acc.transactions.map(t => [t.amount, t.label, t.kind]), [[-42.1, 'Colruyt', 'out'], [250, 'Werkgever NV', 'in']], 'nieuwste eerst, uitgaven negatief');
+  assert.equal(acc.transactions[1].detail, 'Loon oktober');
 
   // Cron: zonder PSU-headers (onbeheerde opvraging)
   calls.length = 0;
@@ -167,6 +179,7 @@ test('MetaApi: account toevoegen gebruikt equity', async () => {
   assert.equal(c.accounts[0].balance, 2100.5);
   assert.equal(c.accounts[0].currency, 'USD');
   assert.equal(c.accounts[0].credit, 400);
+  assert.deepEqual(c.accounts[0].transactions.map(t => [t.label, t.amount]), [['Winst trade XAUUSD', 76], ['Storting', 500]], 'enkel stortingen en gesloten trades, geen bonus');
   assert.equal(calls.find(x => x.url.includes('provisioning')).init.headers['auth-token'], 'meta-token');
   assert.equal((await call(env, '/api/metaapi/add', { method: 'POST', cookie, body: { accountId: '../x' } })).res.status, 400);
 });
@@ -197,6 +210,14 @@ test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity g
       return ok({ error: false, message: '', session: validSession });
     }
     if (u.searchParams.get('session') !== validSession) return ok({ error: true, message: 'Invalid session.' });
+    if (u.pathname.endsWith('/get-history.json')) {
+      assert.equal(u.searchParams.get('id'), '111', 'geen geschiedenis voor demo-accounts');
+      return ok({ error: false, history: [
+        { openTime: '10/01/2026 08:00', closeTime: '10/01/2026 08:00', action: 'Deposit', profit: 1000 },
+        { openTime: '10/14/2026 09:00', closeTime: '10/14/2026 15:20', action: 'Sell', symbol: 'EURUSD', sizing: { value: '0.10' }, profit: 35.5, commission: -0.5, interest: 0 },
+        { openTime: '10/02/2026 08:00', closeTime: '10/02/2026 08:00', action: 'Credit', profit: 200 },
+      ] });
+    }
     if (u.pathname.endsWith('/get-open-trades.json')) {
       assert.equal(u.searchParams.get('id'), '111', 'geen open trades opvragen voor demo-accounts');
       return ok({ error: false, openTrades: [{ profit: 12.5 }, { profit: -2.5 }] });
@@ -220,6 +241,11 @@ test('Myfxbook: sessie hergebruiken, verlopen sessie opnieuw aanmelden, equity g
   assert.equal(c.accounts[1].deposits, null);
   assert.equal(c.accounts[1].credit, null);
   assert.equal(c.accounts[1].demo, true);
+  assert.deepEqual(c.accounts[0].transactions.map(t => [t.label, t.amount, t.date]), [
+    ['Winst trade EURUSD', 35, '2026-10-14T15:20:00.000Z'],
+    ['Storting', 1000, '2026-10-01T08:00:00.000Z'],
+  ]);
+  assert.equal(c.accounts[1].transactions, undefined);
   assert.equal(res.data.config.myfxbook, true);
 
   // Tweede vernieuwing: geen nieuwe login nodig.
