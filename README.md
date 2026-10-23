@@ -8,6 +8,8 @@ Persoonlijk dashboard om al je geld in één oogopslag te zien — op je gsm én
 - Wisselkoersen automatisch van de ECB, alles omgerekend naar euro
 - Verloop van je vermogen over tijd, verdeling per categorie en per instelling
 - **Overzicht**: je vermogen, het verloop en de laatste transacties van al je rekeningen (betalingen, stortingen, winst/verlies van trades)
+- **Maandoverzicht**: inkomsten, uitgaven, overschot en spaarquote per maand, met je grootste uitgaven (overschrijvingen tussen je eigen rekeningen tellen niet mee)
+- **Spaardoelen**: een bedrag tegen een datum, voor je hele vermogen of enkele rekeningen, met hoeveel je per maand nodig hebt en of je op schema zit
 - **Rekeningen**: elke rekening apart; tik erop voor een eigen grafiek, de stijging/daling en de recentste transacties
 - **Instellingen**: account, gekoppelde accounts, thema, wisselkoersen, back-up
 - Transacties komen automatisch van de bank (Enable Banking) en van MetaTrader (Myfxbook/MetaApi: stortingen, opnames, gesloten trades — de bonus telt niet mee). Bij zelf bijgehouden rekeningen wordt elke saldowijziging gelogd.

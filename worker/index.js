@@ -16,8 +16,8 @@ const metaClient = region => `https://mt-client-api-v1.${region}.agiliumtrade.ai
 const MFX_API = 'https://www.myfxbook.com/api';
 
 const COOKIE = 'mv_session';
-// Zoveel recente transacties per rekening bewaren we (en tonen we in de app).
-const MAX_TX = 60;
+// Zoveel recente transacties per rekening bewaren we: genoeg voor 90 dagen, ook bij een drukke zichtrekening.
+const MAX_TX = 300;
 const TX_DAYS = 90;
 const SESSION_DAYS = 30;
 const MAX_LOGIN_FAILS = 10;
