@@ -1951,6 +1951,24 @@ applyTheme(null);
 try { applyTheme(localStorage.getItem(THEME_KEY)); } catch { /* */ }
 try { applyPrivacy(localStorage.getItem(PRIVACY_KEY) === '1'); } catch { /* */ }
 
+// Navigatiebalk op gsm: krimpt bij naar beneden scrollen, wordt weer groot bij naar boven scrollen.
+const NAV_SCROLL_STEP = 8;
+let navLastY = window.scrollY;
+let navTicking = false;
+
+function syncNavSize() {
+  navTicking = false;
+  const y = window.scrollY;
+  if (y < 60) document.body.classList.remove('nav-compact');
+  else if (Math.abs(y - navLastY) < NAV_SCROLL_STEP) return;
+  else document.body.classList.toggle('nav-compact', y > navLastY);
+  navLastY = y;
+}
+
+window.addEventListener('scroll', () => {
+  if (!navTicking) { navTicking = true; requestAnimationFrame(syncNavSize); }
+}, { passive: true });
+
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);

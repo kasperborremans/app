@@ -432,28 +432,45 @@ body.private .money { filter: blur(9px); user-select: none; }
 @media (max-width: 820px) {
   .shell { display: block; }
   .mobile-only { display: grid !important; }
+  /* Zwevende, donkere balk onderaan die krimpt bij naar beneden scrollen. */
   .sidebar {
-    position: fixed; inset: auto 0 0 0; height: auto; top: auto;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
-    border-right: 0; border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    position: fixed; top: auto; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom));
+    transform: translateX(-50%); height: auto;
+    padding: 6px; border: 0; border-radius: 999px;
+    background: rgba(24, 26, 36, .82);
+    box-shadow: 0 12px 32px -8px rgba(10, 12, 24, .45), inset 0 0 0 1px rgba(255, 255, 255, .08);
+    transition: padding .25s ease, bottom .25s ease;
   }
   .sidebar .brand, .sidebar-foot { display: none; }
-  .nav { flex-direction: row; justify-content: space-around; }
+  .nav { flex-direction: row; justify-content: center; gap: 2px; }
   /* Op gsm: Rekeningen links, Overzicht in het midden, Instellingen rechts. */
   .nav .nav-accounts { order: 1; }
   .nav .nav-home { order: 2; }
   .nav .nav-settings { order: 3; }
   .mobile-only.gone { display: none !important; }
   .nav a {
-    flex: 1; flex-direction: column; gap: 3px; padding: 6px 4px;
-    font-size: 11px; text-align: center;
+    flex: none; width: 84px; flex-direction: column; justify-content: center; gap: 3px;
+    padding: 8px 4px; border-radius: 999px;
+    color: rgba(255, 255, 255, .62); font-size: 11px; text-align: center;
+    transition: width .25s ease, padding .25s ease, gap .25s ease, background .2s, color .2s;
   }
-  .nav a[aria-current="page"] { background: transparent; }
+  .nav a > span:not(.nav-badge) {
+    max-height: 16px; overflow: hidden; white-space: nowrap;
+    transition: max-height .25s ease, opacity .2s ease;
+  }
+  .nav a:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+  .nav a[aria-current="page"] { background: rgba(255, 255, 255, .16); color: #fff; }
   .nav a[aria-current="page"] svg { stroke-width: 2.2; }
+  .nav svg { transition: width .25s ease, height .25s ease; }
   .nav-badge { position: absolute; top: 2px; left: calc(50% + 6px); margin: 0; min-width: 16px; height: 16px; font-size: 10px; padding: 0 4px; }
-  .content { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }
-  .toast { bottom: calc(84px + env(safe-area-inset-bottom)); }
+  /* Compact: enkel icoontjes, kleiner en iets lager. */
+  .nav-compact .sidebar { padding: 4px; bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .nav-compact .nav a { width: 56px; padding: 8px 4px; gap: 0; }
+  .nav-compact .nav a > span:not(.nav-badge) { max-height: 0; opacity: 0; }
+  .nav-compact .nav svg { width: 22px; height: 22px; }
+  .nav-compact .nav-badge { top: 0; left: calc(50% + 4px); }
+  .content { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
   .topbar { padding: 12px 20px; }
   main { padding: 20px 20px 32px; }
 }
